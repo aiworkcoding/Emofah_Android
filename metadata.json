@@ -1,0 +1,6 @@
+{
+  "name": "Emofah Agencies",
+  "description": "Emofah Agencies — Equipping Work. Enabling Progress. Modern glassmorphic workspace application.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

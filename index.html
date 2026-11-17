@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Emofah Agencies — Android App &amp; Build Hub</title>
+    <meta name="description" content="Emofah Agencies — Native Android Kotlin/Compose Application Blueprint &amp; Interactive Preview." />
+    <meta property="og:title" content="Emofah Agencies — Native Android" />
+    <meta property="og:description" content="Equipping Work. Enabling Progress." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#103c60" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#060d18" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/aistudio/favicon-32x32_c5dc4b9a.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/aistudio/favicon-16x16_09d037ab.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/aistudio/apple-touch-icon_1d0aa4b7.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..600&family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('emofah-theme');
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var isDark = stored === 'dark' || (stored !== 'light' && prefersDark);
+          if (isDark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#f8fafc] text-[#0b1f33] dark:bg-[#060d18] dark:text-[#f1f5f9] antialiased selection:bg-[#43b1d4]/25">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

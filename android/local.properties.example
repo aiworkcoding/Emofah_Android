@@ -1,0 +1,9 @@
+# Copy this file to android/local.properties (ignored by git)
+# sdk.dir=/path/to/Android/sdk
+
+# Shared Emofah Supabase Backend (Publishable anon key only - NEVER put service_role here)
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
+
+# Optional: override cloud recognition endpoint (defaults to SUPABASE_URL/functions/v1/recognize-product)
+# CLOUD_RECOGNITION_URL=https://your-project-ref.supabase.co/functions/v1/recognize-product

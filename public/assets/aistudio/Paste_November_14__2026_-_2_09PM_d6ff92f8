@@ -1,0 +1,1029 @@
+EMOFAH AGENCIES — ANDROID APPLICATION DEVELOPMENT BLUEPRINT
+Image-First Product Recognition, Frictionless Sales Capture and Offline-First Business Operations
+Document status: Proposed development blueprint
+Platform: Native Android
+Primary development environment: Google AI Studio
+Backend: Shared Emofah Supabase backend
+Primary objective: Make daily business activity effortless to capture, even when the user has little technical knowledge or the internet is unavailable.
+PART A — PRODUCT VISION AND NON-NEGOTIABLE PRINCIPLES
+A1. The central problem
+Emofah's most important operational problem is incomplete recording of sales and business activity.
+The application must not assume that users will willingly perform lengthy administrative work. It must minimise the effort required to record a transaction.
+The application should transform ordinary shop activities into recorded business events:
+A product is photographed.
+The product is identified.
+The user specifies how many units were sold.
+The user taps one button.
+The sale is recorded.
+Inventory is updated.
+The transaction is synchronised with the shared backend.
+The same principle applies to incoming stock, expenses and financial activity.
+A2. Non-negotiable design principles
+Simplicity first: ordinary operations must require as few interactions as reasonably possible.
+Image-first identification: product photographs are the primary identification mechanism. Barcodes are not a required dependency.
+One product at a time: identify one product, then specify its quantity.
+One-touch sale recording: provide a prominent action to record a completed sale.
+Real database operations: a recorded sale must update the authoritative business records, not merely change the screen.
+Offline-first: essential operations must work without an internet connection.
+Automatic synchronisation: queued transactions synchronise when connectivity returns.
+No fabricated recognition: uncertain product matches must be presented for confirmation.
+No fabricated financial data: prices, stock and transaction amounts must come from trusted records or explicit user input.
+Minimal mandatory fields: do not demand customer details for an ordinary walk-in sale.
+No duplicate transactions: retrying synchronisation must not create duplicate sales or stock movements.
+Shared source of truth: Android, desktop and storefront use the same business backend.
+Auditability: every important business change must be attributable to an actor and transaction.
+Graceful failure: never show a completed sale when the transaction has not been safely recorded.
+Progressive complexity: advanced settings must not obstruct ordinary daily operations.
+A3. The primary daily workflow
+Sale workflow:
+Open app → Scan product → Confirm match → Specify quantity → Tap Record Sale → Receive clear saved confirmation.
+Stock arrival workflow:
+Open app → Scan product → Specify quantity received → Tap Record Stock Arrival.
+Financial activity workflow:
+Capture transaction → Extract details → Classify or leave pending → Synchronise → Review when necessary.
+These are the workflows around which the entire interface should be designed.
+PART B — APPLICATION STRUCTURE
+B1. Primary navigation
+The application should have a small, understandable navigation structure.
+Home
+Scan
+Record Sale
+Stock
+Money
+Orders
+Activity
+Do not create a separate navigation destination for every small feature. Related functions should be grouped logically.
+B2. Home dashboard
+The home screen must prioritise actions over charts.
+Main actions
+Scan Product
+Record Sale
+Receive Stock
+Record Expense
+View Orders
+Essential information
+Sales recorded today.
+Total sales recorded today.
+Pending offline transactions.
+Last successful synchronisation.
+Stock warnings.
+Transactions requiring attention.
+Micro-actions
+Display a prominent Scan Product action.
+Display a prominent Record Sale action.
+Make the main actions reachable without navigating through settings.
+Show a small pending-sync indicator.
+Allow the user to open the pending transaction list.
+Display today's sales using saved transaction data.
+Distinguish locally saved information from server-confirmed information.
+Avoid overwhelming the home screen with accounting terminology.
+PART C — PHASE 1: IMAGE-FIRST PRODUCT SCANNING
+Objective: Allow the user to identify an individual product using its photograph, without requiring a barcode.
+Stage 1.1 — Product recognition reference foundation
+The recognition system needs a trustworthy catalogue to search.
+Action 1.1.1 — Inspect the existing product catalogue
+Micro-actions:
+Inspect the current Supabase product table.
+Identify the actual product primary key.
+Identify existing product name fields.
+Identify brand and category fields, if present.
+Identify selling-price fields.
+Identify cost-price fields.
+Identify stock fields.
+Identify image and image-storage fields.
+Identify product variant relationships, if present.
+Identify existing product status and archive fields.
+Identify existing relationships with sales and orders.
+Document the actual schema before making changes.
+Action 1.1.2 — Establish the product identity
+Each recognised product must resolve to an existing catalogue identity.
+Micro-actions:
+Use the existing product primary key as the canonical identity.
+Do not use the product name alone as a unique identifier.
+Support different products with similar names.
+Distinguish variants such as size, flavour, colour and model.
+Preserve existing product IDs when updating records.
+Do not create a second product identity system unnecessarily.
+Action 1.1.3 — Establish product reference photographs
+Micro-actions:
+Inspect existing product photographs.
+Identify the existing Supabase Storage arrangement.
+Reuse existing photographs where suitable.
+Allow multiple reference photographs for one product when needed.
+Associate each reference photograph with the correct product ID.
+Support front, back and side photographs where useful.
+Record image metadata.
+Cache suitable reference photographs on the Android device.
+Detect unavailable or invalid images.
+Avoid downloading the entire image library unnecessarily.
+Action 1.1.4 — Establish additional recognition information
+Micro-actions:
+Use registered product names.
+Use registered brand names.
+Use registered model names.
+Use sizes and packaging information.
+Use product aliases where available.
+Use category information as supporting context.
+Preserve variant distinctions.
+Allow corrected recognition aliases to be saved after human confirmation.
+Action 1.1.5 — Build the recognition reference index
+Micro-actions:
+Generate visual representations for registered reference images using the selected recognition approach.
+Associate each representation with its product ID.
+Keep reference versions identifiable.
+Build an index suitable for comparing new photographs with registered products.
+Cache the required index or supported recognition data locally.
+Update the local index when catalogue products or reference images change.
+Remove archived products from normal recognition results without destroying historical references.
+Support rebuilding the index if local data becomes invalid.
+Important: A visual representation or embedding is a recognition aid, not the product's identity. The catalogue product ID remains authoritative.
+Stage 1.2 — Camera foundation
+Action 1.2.1 — Implement camera access
+Micro-actions:
+Request camera permission when the feature is first used.
+Explain why the permission is required.
+Open the camera directly from Scan Product.
+Provide a clear capture control.
+Provide a retake option.
+Provide a cancel option.
+Handle permission denial gracefully.
+Avoid opening unrelated screens before camera capture.
+Action 1.2.2 — Capture a product photograph
+Micro-actions:
+Capture one product at a time.
+Guide the user to place the product inside the capture area.
+Provide basic focus assistance.
+Detect excessively blurred images where practical.
+Detect very poor lighting where practical.
+Allow the user to retake the image.
+Compress the image appropriately.
+Preserve sufficient detail for recognition.
+Save a temporary local copy.
+Do not require internet access to capture.
+Action 1.2.3 — Prepare the captured image
+Micro-actions:
+Correct orientation.
+Resize to the model's required input dimensions.
+Apply suitable image preprocessing.
+Preserve the original image when needed for later review.
+Generate a lightweight recognition copy.
+Avoid unnecessary repeated image processing.
+Stage 1.3 — On-device product recognition
+Action 1.3.1 — Search the local catalogue first
+Micro-actions:
+Load the local product catalogue.
+Load available product reference data.
+Compare the captured image with cached reference representations.
+Retrieve the most likely matches.
+Compare relevant product attributes.
+Use OCR to extract visible packaging text.
+Compare OCR results with catalogue names, brands and variants.
+Combine visual and text evidence.
+Return a ranked list of candidates.
+Never assume that the highest-ranked candidate is automatically correct.
+Action 1.3.2 — Implement recognition confidence handling
+Micro-actions:
+Establish confidence thresholds through testing.
+Automatically highlight a strong candidate without concealing uncertainty.
+Present alternatives when multiple products are similar.
+Request confirmation when the match is ambiguous.
+Show an unidentified result when no reliable match exists.
+Avoid inventing a product ID.
+Avoid selecting a product solely because its name is similar.
+Preserve the captured image for review when identification fails.
+Action 1.3.3 — Display the recognition result
+Display:
+Product photograph.
+Product name.
+Brand where available.
+Variant or size.
+Current catalogue selling price.
+Available stock, with its data freshness clearly indicated.
+Recognition confidence or an understandable match status.
+Micro-actions:
+Display the best candidate.
+Allow the user to confirm it.
+Allow selection of an alternative.
+Allow retaking the photograph.
+Provide a clear unidentified-product route.
+Do not expose technical model scores unnecessarily.
+Stage 1.4 — Cloud-assisted recognition
+Action 1.4.1 — Provide an online fallback
+Micro-actions:
+Detect when local recognition cannot confidently identify a product.
+Check connectivity.
+If online, optionally submit the captured image to the configured recognition service.
+Provide catalogue context to the service.
+Request candidate product IDs or identifying attributes.
+Validate returned candidate IDs against the actual catalogue.
+Reject unknown product IDs.
+Present the result for confirmation when required.
+Save corrected recognition information for future use.
+Handle cloud failures without losing the captured image.
+Action 1.4.2 — Control AI costs
+Micro-actions:
+Search locally before calling cloud AI.
+Avoid cloud calls for every ordinary product scan.
+Avoid sending duplicate images repeatedly.
+Use image resizing and compression.
+Cache suitable recognition results.
+Use cloud AI only when it adds meaningful value.
+Track recognition failures and cloud usage.
+Do not make cloud AI mandatory for basic sales.
+Stage 1.5 — Unknown product registration
+Action 1.5.1 — Create a quick registration route
+Micro-actions:
+Preserve the captured image.
+Extract visible text using OCR.
+Suggest a product name.
+Suggest a brand where identifiable.
+Suggest a category where supported.
+Suggest a variant or size where identifiable.
+Allow corrections.
+Request essential missing commercial information.
+Require a selling price before the product can be sold.
+Request cost information where required by the business's stock and accounting policies.
+Save the product to the shared catalogue when online.
+Save a local pending product draft when offline.
+Prevent accidental duplicate product registration.
+Add the new product to the local recognition index after successful registration.
+Rule: AI suggestions must never silently become authoritative product data. A human must confirm essential product details.
+Stage 1.6 — Recognition learning and correction
+Action 1.6.1 — Record confirmed corrections
+Micro-actions:
+Record the originally suggested match.
+Record the product actually selected.
+Associate the correction with the captured image when permitted.
+Add useful aliases where appropriate.
+Update the local recognition reference index.
+Synchronise approved reference updates.
+Avoid learning from unconfirmed guesses.
+Preserve an audit trail of catalogue corrections.
+PART D — PHASE 2: FRICTIONLESS SALES CAPTURE
+Objective: Make it exceptionally easy to record an actual sale and update the business database correctly.
+Stage 2.1 — Single-product sale interface
+Action 2.1.1 — Open a sale from a recognised product
+Micro-actions:
+Allow a confirmed product to enter the sale interface directly.
+Retrieve the product's registered selling price.
+Retrieve its product ID.
+Retrieve its available stock information.
+Display the product name and photograph.
+Default quantity to one.
+Avoid asking for customer information unnecessarily.
+Action 2.1.2 — Specify quantity
+Micro-actions:
+Display a clear quantity control.
+Default quantity to 1.
+Provide increment and decrement controls.
+Allow direct numeric quantity entry.
+Prevent zero or negative quantities.
+Validate quantity against available stock according to the configured stock policy.
+Display the calculated total.
+Allow the user to correct quantity before recording.
+Action 2.1.3 — Display the sale action
+Provide a prominent one-touch button:
+RECORD SALE
+The button must be visible without opening another menu.
+Micro-actions:
+Display the product and quantity.
+Display the calculated sale total.
+Make the button large and easy to tap.
+Prevent accidental repeated submissions.
+Disable the action while the same submission is being processed.
+Provide immediate feedback after local persistence or server confirmation.
+Preserve the sale if the application closes unexpectedly after it has been committed locally.
+Stage 2.2 — One-touch transaction recording
+Action 2.2.1 — Construct the sale transaction
+Micro-actions:
+Generate a unique transaction ID.
+Include the product ID.
+Include the quantity sold.
+Include the applicable unit selling price.
+Calculate the total.
+Include the transaction timestamp.
+Associate the authenticated staff member or approved device identity.
+Include the payment method if supplied or already selected.
+Include the sale source as Android.
+Include an idempotency key.
+Preserve the relevant price information at the time of sale.
+Avoid deriving product identity from the photograph after confirmation.
+Action 2.2.2 — Record the transaction online
+When online:
+Submit the sale to a trusted backend operation.
+Validate the product identity.
+Validate the quantity.
+Validate applicable pricing rules.
+Validate stock policy.
+Record the sale.
+Record the associated sale item.
+Update inventory through the authoritative stock movement process.
+Record the audit event.
+Commit all related changes atomically.
+Return the saved transaction identity and result.
+Update the Android interface using the confirmed result.
+Critical requirement: The sale, sale item and stock movement must not be left partially recorded. Use an appropriate transactional backend operation, such as a Supabase PostgreSQL RPC or another trusted server-side transaction mechanism.
+The Android client must not independently make several unrelated database writes and assume they form one transaction.
+Action 2.2.3 — Record the transaction offline
+When offline:
+Generate the unique sale ID locally.
+Validate the cached product and available local information.
+Save the transaction to the local database.
+Save the associated sale item.
+Record the event in the local synchronisation queue.
+Update the local stock projection.
+Mark the sale as saved locally and awaiting synchronisation.
+Show the user a clear confirmation.
+Do not claim that the cloud database has already been updated.
+Preserve the transaction through application restart.
+Action 2.2.4 — Prevent duplicate sales
+Micro-actions:
+Assign a stable transaction ID before submission.
+Reuse the same ID for retries.
+Enforce backend idempotency.
+Reject duplicate processing of an already committed transaction.
+Return the original transaction result for safe retries where appropriate.
+Never generate a new sale merely because the first network response was lost.
+Stage 2.3 — Sale speed and usability
+Action 2.3.1 — Reduce unnecessary interaction
+Micro-actions:
+Default to one unit.
+Do not require a customer name.
+Do not require a description.
+Do not require a category selection during a sale.
+Do not ask for a product name after successful recognition.
+Do not ask for the selling price when a valid catalogue price exists.
+Avoid unnecessary confirmation screens.
+Allow rapid return to Scan Product after recording.
+Keep the sales workflow visually consistent.
+Preserve the user's selected payment method where appropriate and permitted.
+Action 2.3.2 — Support price exceptions safely
+Micro-actions:
+Use the registered selling price by default.
+Permit price overrides only when authorised.
+Record the original price.
+Record the overridden price.
+Record the person making the change.
+Require an appropriate reason where business policy requires it.
+Prevent unauthorised users from changing prices.
+Preserve the actual transaction price for reporting.
+Stage 2.4 — Sale history and correction
+Action 2.4.1 — Display recorded sales
+Micro-actions:
+Display today's transactions.
+Display product name.
+Display quantity.
+Display total.
+Display transaction time.
+Display payment method where available.
+Display sync status.
+Allow a transaction to be opened for details.
+Action 2.4.2 — Correct mistakes safely
+Micro-actions:
+Do not silently delete a completed sale.
+Provide an authorised correction or reversal process.
+Preserve the original transaction.
+Record the reason.
+Reverse or correct associated stock movements appropriately.
+Preserve the audit trail.
+Apply the corresponding accounting treatment.
+Prevent a correction from being applied twice.
+PART E — PHASE 3: OFFLINE-FIRST DATA AND SYNCHRONISATION
+Objective: Ensure that the application remains useful when internet connectivity is unavailable.
+Stage 3.1 — Local database foundation
+Action 3.1.1 — Implement local persistence
+Micro-actions:
+Use Room as the local database.
+Define local product records.
+Define local product reference-image records.
+Define local sales.
+Define local sale items.
+Define local stock projections.
+Define pending financial activity.
+Define pending product registrations.
+Define synchronisation queue records.
+Define local audit or event records where required.
+Use stable identifiers.
+Add appropriate database migrations.
+Stage 3.2 — Local catalogue cache
+Action 3.2.1 — Cache essential product information
+Micro-actions:
+Download required active products.
+Cache product IDs.
+Cache names and identifying attributes.
+Cache variants.
+Cache current selling prices.
+Cache stock information with its last-updated time.
+Cache suitable recognition reference data.
+Download reference images progressively.
+Avoid unnecessary storage usage.
+Refresh changed records when online.
+Stage 3.3 — Synchronisation queue
+Action 3.3.1 — Queue local business events
+Micro-actions:
+Assign each event a unique ID.
+Record event type.
+Record creation time.
+Record the device or actor identity.
+Store the minimum required payload.
+Store dependency relationships.
+Track retry status.
+Track last attempt.
+Track failure reason.
+Track successful server acknowledgement.
+Action 3.3.2 — Synchronise in dependency order
+Micro-actions:
+Synchronise pending product registrations before transactions that depend on them.
+Synchronise product images where required.
+Synchronise sales and associated sale items.
+Synchronise related financial events.
+Synchronise other supported business activity.
+Avoid sending an event before its dependencies exist.
+Reuse the same transaction ID for retries.
+Mark events complete only after server acknowledgement.
+Stage 3.4 — Background synchronisation
+Action 3.4.1 — Implement reliable background work
+Micro-actions:
+Use WorkManager for suitable persistent background sync jobs.
+Check network availability.
+Resume pending work when connectivity returns.
+Support application restart.
+Support device restart where permitted.
+Use bounded retries and backoff.
+Handle server timeouts.
+Handle authentication expiry.
+Handle partial upload failures.
+Avoid draining the battery through continuous polling.
+Stage 3.5 — Conflict handling
+Action 3.5.1 — Resolve stock conflicts
+Micro-actions:
+Treat server inventory as authoritative after synchronisation.
+Keep local stock figures provisional while offline.
+Detect insufficient stock at server processing time.
+Do not silently overwrite newer server values.
+Record conflicting events for review.
+Preserve the original sale attempt.
+Apply approved correction or exception procedures.
+Explain unresolved conflicts in simple language.
+Action 3.5.2 — Protect financial records
+Micro-actions:
+Never discard a locally recorded financial event because of a network failure.
+Preserve original amounts and transaction references.
+Prevent duplicate uploads.
+Identify records that could not be reconciled.
+Require review when automated matching is uncertain.
+Stage 3.6 — Offline status interface
+Micro-actions:
+Display whether the device is online.
+Display the number of pending transactions.
+Distinguish locally saved records from server-confirmed records.
+Show the last successful sync time.
+Allow users to inspect failed sync items.
+Retry safely.
+Avoid technical error messages where a simple explanation is sufficient.
+PART F — PHASE 4: STOCK OPERATIONS
+Objective: Allow everyday stock activities to be captured quickly without duplicating the desktop inventory system.
+Stage 4.1 — Stock lookup
+Micro-actions:
+Scan a product.
+Identify it using the catalogue.
+Display available stock.
+Display stock freshness.
+Display product location where supported.
+Display recent stock movements.
+Display low-stock status.
+Stage 4.2 — Receive stock
+Micro-actions:
+Scan the arriving product.
+Confirm its identity.
+Enter quantity received.
+Capture supplier where required.
+Capture purchase cost where required.
+Allow supporting invoice evidence.
+Save locally when offline.
+Submit a trusted stock-receiving operation when online.
+Update stock through the existing inventory movement system.
+Preserve the receiving record.
+Stage 4.3 — Stock adjustments
+Micro-actions:
+Scan product.
+Select adjustment reason.
+Enter quantity change.
+Show the resulting stock.
+Require authorisation where applicable.
+Record the actor.
+Save the adjustment.
+Preserve the movement history.
+Stage 4.4 — Physical stock counting
+Micro-actions:
+Scan product.
+Display expected stock.
+Enter counted quantity.
+Calculate discrepancy.
+Save the count.
+Allow review.
+Submit approved reconciliation.
+Record the adjustment through the authoritative inventory system.
+Stage 4.5 — Product registration
+Micro-actions:
+Photograph product.
+Extract available information.
+Suggest name and identifying details.
+Confirm product identity.
+Enter required commercial information.
+Save product.
+Save reference image.
+Update the catalogue cache.
+Update recognition references.
+Stage 4.6 — Stock alerts
+Micro-actions:
+Retrieve configured stock thresholds.
+Identify low-stock products.
+Display useful alerts.
+Allow the user to open the product.
+Avoid creating a second alert system unrelated to desktop inventory.
+PART G — PHASE 5: FINANCIAL ACTIVITY AND M-PESA MONITORING
+Objective: Capture money movements with minimal manual entry while preserving correct accounting classification.
+Stage 5.1 — Financial activity foundation
+Action 5.1.1 — Define the financial event model
+Each captured event should support:
+Unique event identity.
+Source.
+Amount.
+Currency.
+Transaction reference.
+Sender or recipient where available.
+Timestamp.
+Raw source evidence where lawfully retained.
+Parsed information.
+Provisional classification.
+Review status.
+Synchronisation status.
+Action 5.1.2 — Separate financial concepts
+The system must distinguish:
+Money movement.
+Business or personal classification.
+Accounting treatment.
+An outgoing payment is not automatically an expense. A transfer between accounts is not automatically an expense. A received payment is not automatically new revenue.
+Stage 5.2 — Message monitoring
+Action 5.2.1 — Establish supported message access
+Micro-actions:
+Research Android SMS access requirements before implementation.
+Check applicable Google Play distribution policies if the app will be distributed through Play.
+Request only necessary permissions.
+Explain the purpose of message access.
+Obtain appropriate user consent.
+Limit processing to supported financial messages.
+Avoid collecting unrelated personal messages.
+Provide an understandable monitoring control.
+Handle permission denial without breaking sales and stock functions.
+Action 5.2.2 — Detect relevant messages
+Micro-actions:
+Identify supported sender patterns.
+Identify supported M-Pesa message formats.
+Detect relevant transaction messages.
+Ignore unrelated messages.
+Avoid processing the same message twice.
+Preserve message arrival time.
+Queue supported events locally.
+Stage 5.3 — Financial message parser
+Action 5.3.1 — Build the parsing pipeline
+Micro-actions:
+Identify message template.
+Extract transaction reference.
+Extract amount.
+Extract transaction time.
+Extract sender or recipient where available.
+Extract available balance where appropriate.
+Identify transaction direction.
+Record parsing confidence.
+Identify unknown formats.
+Preserve the original evidence subject to retention and privacy rules.
+Action 5.3.2 — Validate parsed data
+Micro-actions:
+Validate amount format.
+Validate currency.
+Validate reference format.
+Validate transaction timestamp.
+Detect missing required fields.
+Detect duplicate references.
+Flag uncertain parsing.
+Avoid creating a confirmed accounting entry from incomplete data.
+Stage 5.4 — Transaction classification
+Action 5.4.1 — Provide understandable categories
+Initial proposed categories:
+Customer payment.
+Supplier payment.
+Domestic expenditure.
+Business expense.
+Transfer to bank.
+Transfer between own accounts.
+Cash withdrawal.
+Cash deposit.
+Other income.
+Unclassified.
+These are proposed categories, not final accounting policy.
+Action 5.4.2 — Support quick classification
+Micro-actions:
+Display transaction amount.
+Display available counterparty information.
+Suggest a category.
+Allow one-tap confirmation.
+Allow correction.
+Allow the user to leave it unclassified.
+Save confirmed classification.
+Remember approved classification patterns where safe.
+Never silently classify uncertain events.
+Stage 5.5 — Financial synchronisation and reconciliation
+Micro-actions:
+Save financial events locally.
+Synchronise them when online.
+Match references against existing payment records.
+Detect duplicates.
+Link customer receipts to sales where evidence supports the match.
+Link supplier payments to payable records where appropriate.
+Distinguish transfers from expenses.
+Flag unmatched transactions.
+Provide a review process.
+Apply accounting treatment through the shared accounting system.
+PART H — PHASE 6: ONLINE ORDERS AND CUSTOMER OPERATIONS
+Stage 6.1 — Online order retrieval
+Micro-actions:
+Retrieve orders from the existing shared backend.
+Display customer details available on the order.
+Display ordered products.
+Display quantities and totals.
+Display current status.
+Display payment information where available.
+Handle connectivity failures.
+Stage 6.2 — Order management
+Micro-actions:
+Open an order.
+Confirm availability.
+Update status through authorised backend operations.
+Record fulfilment activity.
+Communicate important status changes where configured.
+Preserve order history.
+Avoid rebuilding the existing storefront.
+Stage 6.3 — Convert fulfilled orders into sales
+Micro-actions:
+Verify the order identity.
+Check whether it has already generated a sale.
+Generate or link the appropriate sale transaction.
+Prevent duplicate stock deduction.
+Preserve the original order.
+Record the relationship between order and sale.
+PART I — PHASE 7: RECEIPTS, PRINTING AND COMMUNICATION
+Stage 7.1 — Digital receipts
+Micro-actions:
+Generate a receipt from a saved sale.
+Include transaction reference.
+Include product details.
+Include quantities.
+Include unit prices and totals.
+Include payment information where available.
+Allow sharing.
+Queue delivery when offline.
+Never treat failed receipt delivery as a failed sale.
+Stage 7.2 — Bluetooth printing
+Micro-actions:
+Discover supported printers.
+Request required Bluetooth permissions.
+Connect to a selected printer.
+Format the receipt.
+Print.
+Handle disconnection.
+Allow retry.
+Preserve the original sale regardless of printing failure.
+Stage 7.3 — Notifications
+Micro-actions:
+Notify users about important incoming orders.
+Notify about low stock.
+Notify about sync failures requiring attention.
+Notify about unresolved financial activity.
+Avoid excessive notifications.
+Respect notification settings.
+PART J — PHASE 8: BUSINESS ACTIVITY AND REPORTING
+Stage 8.1 — Daily activity
+Display:
+Sales count.
+Recorded sales total.
+Payments received where confirmed.
+Expenses recorded.
+Pending financial classification.
+Pending synchronisation.
+Stock warnings.
+Stage 8.2 — Transaction history
+Micro-actions:
+Display recent sales.
+Display stock movements.
+Display financial activity.
+Filter by date.
+Filter by type.
+Open transaction details.
+Display source and actor.
+Display sync state.
+Stage 8.3 — Data freshness
+Micro-actions:
+Display the last successful sync.
+Identify locally saved records.
+Identify server-confirmed records.
+Warn when information is stale.
+Avoid presenting incomplete offline reports as definitive business totals.
+PART K — PHASE 9: SECURITY, PERMISSIONS AND RELIABILITY
+Stage 9.1 — Authentication
+Micro-actions:
+Use the approved Supabase authentication approach.
+Restore valid sessions.
+Handle expired sessions.
+Protect business operations.
+Support authorised sign-out.
+Never embed service-role secrets in the application.
+Stage 9.2 — Permissions
+Micro-actions:
+Identify roles required by the business.
+Restrict sensitive actions.
+Restrict price overrides where required.
+Restrict stock adjustments where required.
+Restrict financial corrections where required.
+Enforce permissions in trusted backend operations and RLS, not only by hiding buttons.
+Stage 9.3 — Audit and accountability
+Micro-actions:
+Identify the actor.
+Identify the device or source.
+Record transaction time.
+Record the operation.
+Preserve relevant before-and-after information.
+Preserve reversal history.
+Prevent unauthorised alteration of historical transactions.
+Stage 9.4 — Reliability
+Micro-actions:
+Handle application termination.
+Handle device restart.
+Handle network interruption.
+Handle duplicate submissions.
+Handle expired authentication.
+Handle corrupted local cache.
+Handle failed image uploads.
+Handle database migration failures safely.
+Preserve unsynchronised records.
+Provide understandable error recovery.
+PART L — PHASE 10: TESTING, VERIFICATION AND DELIVERY
+Stage 10.1 — Image recognition testing
+Test registered products.
+Test products with multiple reference photographs.
+Test similar-looking products.
+Test different product sizes.
+Test poor lighting.
+Test blurry images.
+Test unfamiliar products.
+Test OCR failures.
+Test offline recognition.
+Test cloud fallback.
+Test incorrect recognition correction.
+Verify that no invented product IDs are accepted.
+Stage 10.2 — Sales testing
+Record one product with quantity one.
+Record one product with quantity greater than one.
+Record multiple separate product sales.
+Verify correct selling price.
+Verify total calculation.
+Verify sale persistence.
+Verify stock deduction.
+Verify sale history.
+Verify transaction attribution.
+Verify repeated taps cannot create duplicate sales.
+Verify authorised price overrides.
+Verify correction and reversal.
+Stage 10.3 — Offline testing
+Open the application without internet.
+Scan a cached product.
+Record a sale.
+Close the application.
+Reopen it.
+Verify the sale remains.
+Restore connectivity.
+Verify synchronisation.
+Verify the server has exactly one sale.
+Verify stock movements.
+Test interrupted synchronisation.
+Test duplicate retry.
+Test a stock conflict.
+Test authentication expiry.
+Stage 10.4 — Financial monitoring testing
+Test supported message formats.
+Test unknown message formats.
+Test duplicate messages.
+Test incomplete messages.
+Test transfer classification.
+Test domestic expenditure classification.
+Test customer payments.
+Test supplier payments.
+Test offline capture.
+Test synchronisation.
+Verify that transfers are not automatically treated as expenses.
+Stage 10.5 — Cross-platform verification
+Record a sale on Android.
+Verify the sale in the shared backend.
+Verify the sale in desktop.
+Verify the corresponding inventory movement.
+Verify the storefront reflects the authoritative stock state.
+Verify existing online order functionality remains compatible.
+Verify no duplicate sale or stock ledger was introduced.
+Stage 10.6 — Delivery
+Document the implemented architecture.
+Document database changes.
+Document required migrations.
+Document permissions.
+Document configuration requirements.
+Document unresolved limitations.
+Produce a tested Android build.
+Produce a completion report.
+Identify incomplete features honestly.
+PART M — TECHNICAL ARCHITECTURE GUIDANCE
+M1. Recommended Android foundation
+Kotlin for application development.
+Jetpack Compose for UI.
+CameraX for camera capture.
+ML Kit for supported on-device OCR.
+A suitable on-device image recognition runtime, such as TensorFlow Lite or MediaPipe where appropriate.
+Room for local persistence.
+WorkManager for reliable background tasks.
+Supabase for shared backend services.
+These are proposed technologies. The coding agent must verify existing project structure and compatibility before introducing dependencies.
+M2. Recognition architecture
+The recognition pipeline should be:
+Camera image → Image preprocessing → Local visual matching → OCR → Catalogue candidate ranking → Confidence evaluation → User confirmation → Product ID.
+Cloud recognition is an optional fallback.
+The AI must not use general model knowledge as a substitute for the actual Emofah catalogue.
+M3. Transaction architecture
+The sale pipeline should be:
+Confirmed product ID + quantity + trusted price → Sale command → Backend validation → Atomic sale and stock transaction → Confirmation → Local state update.
+Offline:
+Confirmed product ID + quantity + cached price → Local transaction commit → Pending sync queue → Server validation and processing → Acknowledgement.
+M4. Shared backend authority
+Supabase remains the shared source of truth.
+Android must not introduce:
+A separate product master catalogue.
+A separate permanent stock ledger.
+A separate accounting source of truth.
+An independent sale system disconnected from desktop.
+A second online-order system.
+Local Room records are operational copies and queued events, not replacements for the shared backend.
+M5. Schema discovery before implementation
+The existing Emofah project has previously used product fields such as qty, sell_price and buy_price, and sales/order records with their own established structures.
+Those names are historical observations, not permission to assume the current live schema is unchanged.
+The agent must inspect the actual current schema and source before writing migrations or database operations.
+PART N — STRICT INSTRUCTIONS FOR THE GOOGLE AI STUDIO CODING AGENT
+N1. Your role
+Act as a senior Android engineer working on the existing Emofah Agencies ecosystem.
+Do not behave as an autonomous product designer who invents new business rules.
+Your job is to implement the approved blueprint carefully, preserving the existing architecture and shared backend.
+N2. Source discovery is mandatory
+Before modifying anything:
+Inspect the complete Android workspace.
+Identify the application entry point.
+Identify existing navigation.
+Identify existing dependencies.
+Identify existing Supabase integration.
+Identify existing authentication.
+Identify existing data models.
+Identify existing database access patterns.
+Identify existing local persistence.
+Identify existing camera or AI code.
+Identify configuration and build files.
+Identify existing tests.
+Inspect relevant shared backend structures where available.
+Report what already exists and what is missing.
+Do not assume that an empty-looking feature means no implementation exists elsewhere.
+Do not invent filenames, functions, tables, columns, APIs or relationships.
+N3. Preserve existing work
+Reuse working components.
+Reuse existing architecture where suitable.
+Avoid duplicate implementations.
+Avoid unnecessary dependency changes.
+Avoid replacing the entire application to implement one feature.
+Preserve working navigation.
+Preserve authentication.
+Preserve existing integrations.
+Do not make unrelated refactors.
+Explain unavoidable architectural changes before making them.
+N4. Implement only the assigned action
+The development blueprint is deliberately divided into phases, stages, actions and micro-actions.
+For each coding task:
+Work only on the assigned action and its necessary dependencies.
+Inspect relevant surrounding code.
+Identify affected components and data flows.
+Implement the smallest complete change.
+Handle loading, success, empty and failure states.
+Add appropriate tests.
+Verify the feature.
+Report the exact files changed.
+Report what was tested.
+Report what remains incomplete.
+Do not attempt to implement an entire phase from one prompt.
+Do not silently skip micro-actions.
+If an action is too large, divide it into smaller implementation tasks without changing its intended outcome.
+N5. Database and business integrity
+Inspect the real schema before writing queries.
+Never guess column names.
+Never assume a migration has been applied.
+Never expose Supabase service-role credentials.
+Never depend exclusively on client-side validation.
+Use trusted backend operations for business-critical transactions.
+Use atomic operations for sales and stock movements.
+Use idempotency for retryable transactions.
+Preserve transaction history.
+Avoid destructive migrations.
+Preserve storefront compatibility.
+Do not introduce a second inventory or sales ledger.
+N6. Image recognition rules
+Use the Emofah product catalogue as the reference source.
+Match against registered product identities.
+Preserve product and variant distinctions.
+Do not fabricate product IDs.
+Do not infer a selling price from packaging.
+Do not treat an uncertain match as confirmed.
+Provide a manual confirmation route.
+Use OCR as supporting evidence.
+Prefer local recognition for known products.
+Use cloud recognition only when justified.
+Preserve images when recognition fails.
+Do not require barcodes.
+N7. Sales recording rules
+One product is recognised at a time.
+Quantity defaults to one.
+Quantity is editable.
+The registered selling price is used by default.
+A prominent Record Sale button is provided.
+The action records a real transaction.
+The action updates stock through the authoritative transaction process.
+The action must not create duplicate sales.
+The action must work offline through local persistence.
+The UI must distinguish locally saved from server-confirmed transactions.
+A sale must not be lost because receipt printing or delivery fails.
+Do not show a successful sale before durable local or server persistence.
+N8. Offline rules
+Local transactions must survive application restarts.
+Pending transactions must survive network interruptions.
+Synchronisation must be retryable.
+Retries must be idempotent.
+Dependent records must synchronise in the correct order.
+Conflicts must be surfaced, not silently overwritten.
+Server-confirmed data must be distinguished from local projections.
+Cloud AI must never be treated as an offline dependency.
+Do not discard locally captured evidence after a failed upload.
+N9. User experience rules
+Prioritise the shortest reliable workflow.
+Use plain language.
+Make primary actions visually obvious.
+Avoid unnecessary forms.
+Avoid compulsory customer details for walk-in sales.
+Avoid excessive confirmation dialogs.
+Avoid overwhelming dashboards.
+Use sensible defaults.
+Make errors recoverable.
+Keep the interface usable by a non-technical shop operator.
+N10. Quota and context efficiency
+The user is developing through Google AI Studio and needs efficient use of limited AI context and quota.
+Therefore:
+Do not reanalyse the entire repository for every small task when relevant findings are already documented and still valid.
+Maintain a concise architecture and implementation handover.
+Reinspect files whenever there is a reason to suspect they changed.
+Do not reproduce the full blueprint in every implementation prompt.
+Give the agent one clearly bounded task at a time.
+Avoid unnecessary explanations and repeated planning.
+Do not generate large amounts of unused boilerplate.
+Prefer targeted patches over full-file rewrites.
+Report blockers early.
+Do not claim completion without verification.
+N11. Required completion report
+At the end of every assigned implementation task, report:
+Status: Complete / Partial / Blocked.
+Implemented: Exact behaviour delivered.
+Files changed: Actual paths.
+Database changes: Exact migrations or schema changes, if any.
+Dependencies: Any new dependencies and why.
+Verification: Tests and build checks performed.
+Limitations: Known issues.
+Next action: The next smallest logical task.
+PART O — IMPLEMENTATION PRIORITY
+The implementation order must protect the central business objective.
+Inspect Android workspace and shared backend.
+Establish the product catalogue reference model.
+Establish local persistence and offline transaction foundations.
+Implement image capture.
+Implement local product recognition and OCR.
+Implement candidate confirmation.
+Implement the one-product quantity interface.
+Implement one-touch sale recording.
+Implement atomic sale and inventory updates.
+Implement offline sale synchronisation.
+Verify the complete sale workflow.
+Add stock operations.
+Add financial activity monitoring.
+Add order management.
+Add receipts, printing and business summaries.
+Do not postpone reliable sales capture until every advanced AI feature is finished.
+The first major acceptance milestone is simple: a user must be able to photograph a registered product, confirm its identity, choose a quantity, tap Record Sale, and have one correct sale and corresponding stock movement safely recorded — even when the device is offline.
+That is the foundation upon which the rest of Emofah Android should be built.

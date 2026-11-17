@@ -1,0 +1,83 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --emofah-navy: #103c60;
+  --emofah-royal: #14558a;
+  --emofah-azure: #1768a7;
+  --emofah-steel: #348fc2;
+  --emofah-cyan: #43b1d4;
+
+  --surface-canvas: #f8fafc;
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --surface-glass-strong: rgba(255, 255, 255, 0.86);
+  --surface-subtle: rgba(16, 60, 96, 0.04);
+  --border-hairline: rgba(16, 60, 96, 0.09);
+  --border-highlight: rgba(255, 255, 255, 0.65);
+  --text-primary: #0b1f33;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --glass-blur: 20px;
+}
+
+.dark {
+  --surface-canvas: #060d18;
+  --surface-glass: rgba(14, 29, 49, 0.68);
+  --surface-glass-strong: rgba(12, 25, 44, 0.84);
+  --surface-subtle: rgba(67, 177, 212, 0.06);
+  --border-hairline: rgba(67, 177, 212, 0.14);
+  --border-highlight: rgba(255, 255, 255, 0.07);
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+}
+
+@layer base {
+  html {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    scroll-behavior: smooth;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  .font-mono-data {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.emofah-glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(175%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(175%);
+  border: 1px solid var(--border-hairline);
+  box-shadow:
+    inset 0 1px 0 0 var(--border-highlight),
+    0 8px 30px -12px rgba(16, 60, 96, 0.12);
+}
+
+.dark .emofah-glass {
+  box-shadow:
+    inset 0 1px 0 0 var(--border-highlight),
+    0 12px 36px -14px rgba(0, 0, 0, 0.55);
+}
+
+.emofah-glass-bar {
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(24px) saturate(185%);
+  -webkit-backdrop-filter: blur(24px) saturate(185%);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
