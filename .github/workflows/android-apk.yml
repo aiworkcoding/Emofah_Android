@@ -245,13 +245,27 @@ jobs:
           fi
 
           # Verify expected Gradle module and tasks exist before full resolution/build
-          TASKS_OUT=$(./gradlew :app:tasks --group=build --no-daemon --console=plain)
-          for expected_task in assembleDebug; do
-            if ! echo "$TASKS_OUT" | grep -q "$expected_task"; then
+          PROJECTS_OUT=$(./gradlew projects --no-daemon --console=plain)
+          echo "$PROJECTS_OUT"
+          if ! grep -Fq "Project ':app'" <<< "$PROJECTS_OUT"; then
+            echo "ERROR: [GRADLE_WRAPPER_FAILURE] Expected module ':app' not found in Gradle projects."
+            exit 1
+          fi
+
+          tasks_file=$(mktemp)
+          ./gradlew :app:tasks --all --no-daemon --console=plain > "$tasks_file"
+          for expected_task in assembleDebug compileDebugKotlin compileDebugJavaWithJavac testDebugUnitTest; do
+            if ! grep -Eq "(^|[[:space:]])${expected_task}([[:space:]]|$)" "$tasks_file"; then
               echo "ERROR: [GRADLE_WRAPPER_FAILURE] Expected task '$expected_task' not found in :app."
+              echo "--- Discovered :app tasks matching assemble/compileDebug/testDebug ---"
+              grep -E "assemble|compileDebug|testDebug" "$tasks_file" || head -n 80 "$tasks_file"
+              rm -f "$tasks_file"
               exit 1
             fi
           done
+          echo "Verified :app tasks:"
+          grep -E "(^|[[:space:]])(assembleDebug|assembleRelease|compileDebugKotlin|compileDebugJavaWithJavac|testDebugUnitTest)([[:space:]]|$)" "$tasks_file" || true
+          rm -f "$tasks_file"
 
           echo "SUCCESS: Preflight validation passed."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
