@@ -7,58 +7,482 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-debug-apk:
+    name: Build, Verify & Package Debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: android
+        shell: bash
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # =========================================================================
+      # STAGE 1: Checkout
+      # =========================================================================
+      - name: "Stage 1: Checkout repository"
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      # =========================================================================
+      # STAGE 2: Java Setup & Verification
+      # =========================================================================
+      - name: "Stage 2: Set up JDK 17 (Temurin)"
+        id: setup_java
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
+      - name: "Stage 2b: Verify Java 17 toolchain"
+        id: verify_java
         run: |
-          yes | sdkmanager --licenses || true
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 2: Java Setup" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=JAVA_VERSION_MISMATCH" >> "$GITHUB_ENV"
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+          if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+            echo "ERROR: [JAVA_VERSION_MISMATCH] JAVA_HOME is missing or invalid: ${JAVA_HOME:-<unset>}"
+            exit 1
+          fi
 
-      - name: Build Debug APK
+          JAVA_VER_LINE=$(java -version 2>&1 | head -n 1)
+          echo "Detected Java: $JAVA_VER_LINE (JAVA_HOME=$JAVA_HOME)"
+          if ! echo "$JAVA_VER_LINE" | grep -qE '"17\.'; then
+            echo "ERROR: [JAVA_VERSION_MISMATCH] Expected JDK 17, got: $JAVA_VER_LINE"
+            exit 1
+          fi
+
+          rm -f /tmp/emofah_diag.env 2>/dev/null || true
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 3: Android SDK Setup (cmdline-tools only; no obsolete 'tools')
+      # =========================================================================
+      - name: "Stage 3: Set up Android SDK command-line tools"
+        id: setup_android
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: '14742923'
+          accept-android-sdk-licenses: 'true'
+          log-accepted-android-sdk-licenses: 'true'
+          packages: ''
+
+      # =========================================================================
+      # STAGE 4: SDK Licence Verification
+      # =========================================================================
+      - name: "Stage 4: Verify Android SDK licences"
+        id: verify_licenses
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 4: SDK Licence Verification" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=SDK_LICENSE_FAILURE" >> "$GITHUB_ENV"
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            echo "FAILURE_CATEGORY=SDK_SETUP_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [SDK_SETUP_FAILURE] ANDROID_SDK_ROOT is not set or directory does not exist."
+            exit 1
+          fi
+
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            echo "FAILURE_CATEGORY=SDK_SETUP_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [SDK_SETUP_FAILURE] sdkmanager not found on PATH."
+            exit 1
+          fi
+
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+          echo "sdkmanager path=$(command -v sdkmanager)"
+
+          # Non-interactive fallback verification of SDK license acceptance
+          printf 'y\n%.0s' {1..50} | sdkmanager --licenses >/dev/null || {
+            echo "ERROR: [SDK_LICENSE_FAILURE] Failed to accept Android SDK licences."
+            exit 1
+          }
+
+          if [ ! -s "$SDK_ROOT/licenses/android-sdk-license" ]; then
+            echo "ERROR: [SDK_LICENSE_FAILURE] $SDK_ROOT/licenses/android-sdk-license missing or empty."
+            exit 1
+          fi
+          echo "SUCCESS: Android SDK licences verified."
+
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 5: SDK Dependency Installation & Verification
+      # =========================================================================
+      - name: "Stage 5: Install & verify required Android SDK packages"
+        id: verify_sdk_packages
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 5: SDK Dependency Verification" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=SDK_SETUP_FAILURE" >> "$GITHUB_ENV"
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          REQUIRED_PACKAGES=("platform-tools" "platforms;android-34" "build-tools;34.0.0")
+
+          install_with_bounded_retry() {
+            local max_attempts=3
+            local attempt=1
+            local log_file
+            log_file=$(mktemp)
+
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "Installing Android SDK packages (attempt $attempt/$max_attempts): ${REQUIRED_PACKAGES[*]}"
+              if printf 'y\n%.0s' {1..30} | sdkmanager --install "${REQUIRED_PACKAGES[@]}" 2>&1 | tee "$log_file"; then
+                rm -f "$log_file"
+                return 0
+              fi
+
+              if grep -qiE "Failed to find package|Unknown package" "$log_file"; then
+                echo "FAILURE_CATEGORY=SDK_PACKAGE_NOT_FOUND" >> "$GITHUB_ENV"
+                echo "ERROR: [SDK_PACKAGE_NOT_FOUND] Deterministic missing SDK package detected; not retrying."
+                rm -f "$log_file"
+                return 1
+              fi
+
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                echo "Transient SDK download error detected; retrying in 10s..."
+                sleep 10
+              fi
+              attempt=$((attempt + 1))
+            done
+
+            rm -f "$log_file"
+            echo "ERROR: [SDK_SETUP_FAILURE] SDK package installation failed after $max_attempts attempts."
+            return 1
+          }
+
+          install_with_bounded_retry
+
+          for required_file in \
+            "$SDK_ROOT/platform-tools/adb" \
+            "$SDK_ROOT/platforms/android-34/android.jar" \
+            "$SDK_ROOT/build-tools/34.0.0/aapt2" \
+            "$SDK_ROOT/build-tools/34.0.0/apksigner" \
+            "$SDK_ROOT/build-tools/34.0.0/d8"; do
+            if [ ! -e "$required_file" ]; then
+              echo "ERROR: [SDK_SETUP_FAILURE] Missing required SDK component: $required_file"
+              exit 1
+            fi
+          done
+
+          echo "SUCCESS: All required SDK components verified (platform-tools, android-34, build-tools 34.0.0)."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 6: Gradle Setup & Wrapper/Project Preflight Validation
+      # =========================================================================
+      - name: "Stage 6a: Configure Gradle caching & wrapper validation"
+        id: setup_gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          validate-wrappers: true
+          cache-cleanup: on-success
+          add-job-summary: always
+
+      - name: "Stage 6b: Preflight Gradle wrapper & project configuration check"
+        id: preflight
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
-        run: ./gradlew assembleDebug --no-daemon
-
-      - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest --no-daemon
-
-      - name: Verify APK Exists
         run: |
-          if [ ! -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "Error: Debug APK not found!"
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 6: Gradle Wrapper & Preflight Validation" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=GRADLE_WRAPPER_FAILURE" >> "$GITHUB_ENV"
+
+          for f in gradlew gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required project file missing: android/$f"
+              exit 1
+            fi
+          done
+
+          if ! grep -q "org.gradle.wrapper.GradleWrapperMain" gradlew; then
+            echo "ERROR: [GRADLE_WRAPPER_FAILURE] android/gradlew is not a genuine Gradle wrapper script."
             exit 1
           fi
-          echo "APK size: $(ls -lh app/build/outputs/apk/debug/app-debug.apk | awk '{print $5}')"
 
-      - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
+          chmod +x gradlew
+
+          WRAPPER_OUT=$(./gradlew --version --no-daemon --console=plain)
+          echo "$WRAPPER_OUT"
+          if ! echo "$WRAPPER_OUT" | grep -q "Gradle 8.9"; then
+            echo "ERROR: [GRADLE_WRAPPER_FAILURE] Expected Gradle 8.9 from wrapper, got:"
+            echo "$WRAPPER_OUT"
+            exit 1
+          fi
+          if ! echo "$WRAPPER_OUT" | grep -qE "JVM:\s+17\.|Launcher JVM:\s+17\."; then
+            echo "FAILURE_CATEGORY=JAVA_VERSION_MISMATCH" >> "$GITHUB_ENV"
+            echo "ERROR: [JAVA_VERSION_MISMATCH] Gradle wrapper is not running on JDK 17."
+            exit 1
+          fi
+
+          # Validate build-time Supabase config without printing secrets
+          if [ -n "${SUPABASE_URL:-}" ] && [[ ! "$SUPABASE_URL" =~ ^https:// ]]; then
+            echo "ERROR: [PROJECT_CONFIGURATION_FAILURE] vars.SUPABASE_URL must start with https://"
+            exit 1
+          fi
+          if [ -n "${CLOUD_RECOGNITION_URL:-}" ] && [[ ! "$CLOUD_RECOGNITION_URL" =~ ^https:// ]]; then
+            echo "ERROR: [PROJECT_CONFIGURATION_FAILURE] vars.CLOUD_RECOGNITION_URL must start with https://"
+            exit 1
+          fi
+          if ! grep -q 'applicationId = "com.emofah.agencies"' app/build.gradle.kts; then
+            echo "ERROR: [PROJECT_CONFIGURATION_FAILURE] Expected applicationId com.emofah.agencies missing."
+            exit 1
+          fi
+
+          # Verify expected Gradle module and tasks exist before full resolution/build
+          TASKS_OUT=$(./gradlew :app:tasks --group=build --no-daemon --console=plain)
+          for expected_task in assembleDebug; do
+            if ! echo "$TASKS_OUT" | grep -q "$expected_task"; then
+              echo "ERROR: [GRADLE_WRAPPER_FAILURE] Expected task '$expected_task' not found in :app."
+              exit 1
+            fi
+          done
+
+          echo "SUCCESS: Preflight validation passed."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 7: Gradle Dependency Resolution (Bounded Transient Retry)
+      # =========================================================================
+      - name: "Stage 7: Resolve Gradle plugins & Android dependencies"
+        id: resolve_deps
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 7: Gradle Dependency Resolution" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=GRADLE_DEPENDENCY_FAILURE" >> "$GITHUB_ENV"
+
+          max_attempts=3
+          attempt=1
+          log_file=$(mktemp)
+
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "Resolving :app dependencies (attempt $attempt/$max_attempts)..."
+            if ./gradlew :app:dependencies --configuration debugRuntimeClasspath --configuration testDebugUnitTestRuntimeClasspath --no-daemon --console=plain >"$log_file" 2>&1; then
+              echo "SUCCESS: Gradle dependency resolution complete."
+              rm -f "$log_file"
+              echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+              echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
+            cat "$log_file"
+            if grep -qiE "Could not GET|Read timed out|Connection reset|UnknownHostException|ConnectException|status code: 50[0-4]|502 Bad Gateway|503 Service|504 Gateway" "$log_file"; then
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                echo "Transient repository/network error detected; retrying in 15s..."
+                sleep 15
+                attempt=$((attempt + 1))
+                continue
+              fi
+            fi
+
+            echo "ERROR: [GRADLE_DEPENDENCY_FAILURE] Dependency resolution failed deterministically or exhausted retries."
+            rm -f "$log_file"
+            exit 1
+          done
+
+      # =========================================================================
+      # STAGE 8: Project Verification (Unit Tests)
+      # =========================================================================
+      - name: "Stage 8: Clean stale APK outputs & run unit tests"
+        id: unit_tests
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 8: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=PROJECT_COMPILATION_FAILURE" >> "$GITHUB_ENV"
+
+          rm -rf app/build/outputs/apk/debug
+          ./gradlew :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
+
+          echo "SUCCESS: All debug unit tests passed."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 9: Android Compilation
+      # =========================================================================
+      - name: "Stage 9: Compile Android Kotlin & Java sources"
+        id: compile_android
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 9: Android Compilation" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=PROJECT_COMPILATION_FAILURE" >> "$GITHUB_ENV"
+
+          ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac --no-daemon --console=plain --stacktrace
+
+          echo "SUCCESS: Kotlin & Java compilation succeeded."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 10: APK Generation
+      # =========================================================================
+      - name: "Stage 10: Assemble Debug APK"
+        id: assemble_apk
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 10: APK Generation" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=APK_GENERATION_FAILURE" >> "$GITHUB_ENV"
+
+          ./gradlew :app:assembleDebug --no-daemon --console=plain --stacktrace
+
+          echo "SUCCESS: assembleDebug completed."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 11: APK Integrity Verification
+      # =========================================================================
+      - name: "Stage 11: Verify Debug APK integrity, metadata & signature"
+        id: verify_apk
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 11: APK Integrity Verification" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=APK_VALIDATION_FAILURE" >> "$GITHUB_ENV"
+
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: [APK_GENERATION_FAILURE] Debug APK not found at $APK_PATH"
+            echo "FAILURE_CATEGORY=APK_GENERATION_FAILURE" >> "$GITHUB_ENV"
+            exit 1
+          fi
+
+          APK_BYTES=$(stat -c%s "$APK_PATH")
+          if [ "$APK_BYTES" -lt 1048576 ]; then
+            echo "ERROR: [APK_VALIDATION_FAILURE] APK size ($APK_BYTES bytes) is unexpectedly small."
+            exit 1
+          fi
+
+          unzip -tqq "$APK_PATH"
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          AAPT2="$SDK_ROOT/build-tools/34.0.0/aapt2"
+          APKSIGNER="$SDK_ROOT/build-tools/34.0.0/apksigner"
+
+          BADGING=$("$AAPT2" dump badging "$APK_PATH")
+          echo "$BADGING" | head -n 10
+
+          if ! echo "$BADGING" | grep -q "package: name='com.emofah.agencies'"; then
+            echo "ERROR: [APK_VALIDATION_FAILURE] Unexpected applicationId in APK manifest."
+            exit 1
+          fi
+          if ! echo "$BADGING" | grep -q "versionCode='1'"; then
+            echo "ERROR: [APK_VALIDATION_FAILURE] Unexpected versionCode in APK manifest."
+            exit 1
+          fi
+          if ! echo "$BADGING" | grep -q "versionName='0.1.0'"; then
+            echo "ERROR: [APK_VALIDATION_FAILURE] Unexpected versionName in APK manifest."
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK_PATH"
+
+          APK_HUMAN_SIZE=$(ls -lh "$APK_PATH" | awk '{print $5}')
+          APK_SHA256=$(sha256sum "$APK_PATH" | awk '{print $1}')
+
+          {
+            echo "apk_size_human=$APK_HUMAN_SIZE"
+            echo "apk_size_bytes=$APK_BYTES"
+            echo "apk_sha256=$APK_SHA256"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "SUCCESS: Verified app-debug.apk ($APK_HUMAN_SIZE / $APK_BYTES bytes, SHA-256: $APK_SHA256)"
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 12: Artifact Upload (+ Test Diagnostics on Failure)
+      # =========================================================================
+      - name: "Stage 12a: Upload Debug APK artifact"
+        id: upload_apk
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: emofah-android-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+          overwrite: true
+
+      - name: "Stage 12b: Upload unit test report on failure"
+        id: upload_test_reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: emofah-android-test-reports
+          path: android/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # =========================================================================
+      # STAGE 13: Build Summary
+      # =========================================================================
+      - name: "Stage 13: Write Build & Diagnostics Summary"
+        id: build_summary
+        if: always()
+        run: |
+          {
+            echo "## Emofah Android Debug APK — Build Report"
+            echo ""
+            echo "- **Overall Status:** \`${{ job.status }}\`"
+            echo "- **Commit:** \`${{ github.sha }}\` (\`${{ github.ref_name }}\`)"
+            if [ "${{ job.status }}" != "success" ]; then
+              echo "- **Failed Stage:** \`${FAILED_STAGE:-Unknown (inspect step logs)}\`"
+              echo "- **Diagnostic Category:** \`${FAILURE_CATEGORY:-UNCLASSIFIED_FAILURE}\`"
+            fi
+            echo ""
+            echo "| Stage | Result |"
+            echo "| :--- | :--- |"
+            echo "| 1. Checkout | \`${{ steps.checkout.outcome }}\` |"
+            echo "| 2. Java 17 Setup & Verify | \`${{ steps.setup_java.outcome }}\` / \`${{ steps.verify_java.outcome }}\` |"
+            echo "| 3. Android SDK Setup | \`${{ steps.setup_android.outcome }}\` |"
+            echo "| 4. SDK Licences | \`${{ steps.verify_licenses.outcome }}\` |"
+            echo "| 5. SDK Packages (platform-tools, android-34, build-tools 34.0.0) | \`${{ steps.verify_sdk_packages.outcome }}\` |"
+            echo "| 6. Gradle Setup & Preflight | \`${{ steps.setup_gradle.outcome }}\` / \`${{ steps.preflight.outcome }}\` |"
+            echo "| 7. Dependency Resolution | \`${{ steps.resolve_deps.outcome }}\` |"
+            echo "| 8. Unit Tests (testDebugUnitTest) | \`${{ steps.unit_tests.outcome }}\` |"
+            echo "| 9. Android Compilation | \`${{ steps.compile_android.outcome }}\` |"
+            echo "| 10. APK Generation (assembleDebug) | \`${{ steps.assemble_apk.outcome }}\` |"
+            echo "| 11. APK Integrity Verification | \`${{ steps.verify_apk.outcome }}\` |"
+            echo "| 12. Artifact Upload | \`${{ steps.upload_apk.outcome }}\` |"
+            if [ "${{ steps.verify_apk.outcome }}" = "success" ]; then
+              echo ""
+              echo "### APK Details"
+              echo "- **Artifact Name:** \`emofah-android-debug\`"
+              echo "- **Application ID:** \`com.emofah.agencies\`"
+              echo "- **Version:** \`0.1.0\` (versionCode \`1\`)"
+              echo "- **Size:** \`${{ steps.verify_apk.outputs.apk_size_human }}\` (\`${{ steps.verify_apk.outputs.apk_size_bytes }}\` bytes)"
+              echo "- **SHA-256:** \`${{ steps.verify_apk.outputs.apk_sha256 }}\`"
+              echo "- **Download:** Open this workflow run's **Artifacts** section and download \`emofah-android-debug\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

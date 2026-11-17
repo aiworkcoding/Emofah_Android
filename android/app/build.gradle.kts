@@ -40,13 +40,18 @@ android {
     }
 
     val keystoreFile = file("$rootDir/release.keystore")
+    val requireReleaseSigning = System.getenv("EMOFAH_REQUIRE_RELEASE_SIGNING") == "true"
+    val releaseStorePassword = (System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: localProps.getProperty("ANDROID_KEYSTORE_PASSWORD"))?.trim()
+    val releaseKeyAlias = (System.getenv("ANDROID_KEY_ALIAS") ?: localProps.getProperty("ANDROID_KEY_ALIAS"))?.trim()
+    val releaseKeyPassword = (System.getenv("ANDROID_KEY_PASSWORD") ?: localProps.getProperty("ANDROID_KEY_PASSWORD"))?.trim()
+
     signingConfigs {
         create("release") {
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
-                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: localProps.getProperty("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: localProps.getProperty("ANDROID_KEY_ALIAS")
-                keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: localProps.getProperty("ANDROID_KEY_PASSWORD")
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
@@ -58,7 +63,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            if (keystoreFile.exists()) {
+            if (requireReleaseSigning) {
+                if (!keystoreFile.exists() || releaseStorePassword.isNullOrBlank() || releaseKeyAlias.isNullOrBlank() || releaseKeyPassword.isNullOrBlank()) {
+                    throw org.gradle.api.GradleException("[RELEASE_SIGNING_FAILURE] Release signing is required but keystore or signing credentials are missing.")
+                }
+                signingConfig = signingConfigs.getByName("release")
+            } else if (keystoreFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
@@ -96,7 +106,7 @@ dependencies {
     val roomVersion = "2.6.1"
     val cameraXVersion = "1.4.0"
 
-    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
