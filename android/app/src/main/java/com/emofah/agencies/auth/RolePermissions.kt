@@ -102,8 +102,9 @@ data class ServerStaffProfile(
             return runCatching {
                 val obj = JSONObject(rawJson)
                 val roleStr = obj.optString("staff_role", StaffRole.CASHIER.name)
+                val emailVal = obj.optString("email", "").takeIf { it.isNotBlank() && it != "null" }
                 val mappedRole = StaffRole.entries.firstOrNull { it.name == roleStr }
-                    ?: AuthSessionPolicy.mapRoleFromClaims(roleStr)
+                    ?: AuthSessionPolicy.mapRoleFromClaims(roleStr, emailVal)
                 ServerStaffProfile(
                     authenticated = obj.optBoolean("authenticated", false),
                     userId = obj.optString("user_id", "").takeIf { it.isNotBlank() && it != "null" },

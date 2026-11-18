@@ -214,7 +214,7 @@ class SupabaseAuthClient(
                         appMeta?.optString("role", "")?.takeIf { it.isNotBlank() && it != "null" },
                     ).firstOrNull()
 
-                    val mappedRole = AuthSessionPolicy.mapRoleFromClaims(rawRoleClaim)
+                    val mappedRole = AuthSessionPolicy.mapRoleFromClaims(rawRoleClaim, email)
 
                     AuthRpcResult.Success(
                         AuthUserSession(

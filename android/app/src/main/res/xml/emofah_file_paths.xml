@@ -3,4 +3,10 @@
     <cache-path
         name="receipts"
         path="receipts/" />
+    <cache-path
+        name="captured_scans"
+        path="captured_scans/" />
+    <cache-path
+        name="cache_root"
+        path="." />
 </paths>
