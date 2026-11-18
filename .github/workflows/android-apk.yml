@@ -136,19 +136,24 @@ jobs:
           echo "FAILURE_CATEGORY=GRADLE_WRAPPER_FAILURE" >> "$GITHUB_ENV"
 
           for f in gradlew gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml \
-            ../.github/scripts/gradle-with-retry.sh ../.github/scripts/install-sdk.sh ../.github/scripts/verify-apk.sh; do
+            ../.github/scripts/gradle-with-retry.sh ../.github/scripts/install-sdk.sh ../.github/scripts/verify-apk.sh ../.github/scripts/verify-test-results.py; do
             if [ ! -f "$f" ]; then
               echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required file missing: $f"
               exit 1
             fi
           done
 
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required tool 'python3' missing on runner PATH."
+            exit 1
+          fi
+
           if ! grep -q "org.gradle.wrapper.GradleWrapperMain" gradlew; then
             echo "ERROR: [GRADLE_WRAPPER_FAILURE] android/gradlew is not a genuine Gradle wrapper script."
             exit 1
           fi
 
-          chmod +x gradlew ../.github/scripts/*.sh
+          chmod +x gradlew ../.github/scripts/*.sh ../.github/scripts/*.py
 
           WRAPPER_OUT=$(./gradlew --version --no-daemon --console=plain)
           echo "$WRAPPER_OUT"
@@ -279,31 +284,8 @@ jobs:
 
           ./gradlew :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
 
-          TEST_STATS=$(python3 - "app/build/test-results/testDebugUnitTest" <<'PYEOF'
-import glob, os, sys, xml.etree.ElementTree as ET
-results_dir = sys.argv[1]
-files = sorted(glob.glob(os.path.join(results_dir, "TEST-*.xml")))
-suites = len(files)
-tests = failures = errors = skipped = 0
-for f in files:
-    root = ET.parse(f).getroot()
-    tests += int(root.attrib.get("tests", 0))
-    failures += int(root.attrib.get("failures", 0))
-    errors += int(root.attrib.get("errors", 0))
-    skipped += int(root.attrib.get("skipped", 0))
-print(f"{suites} {tests} {failures} {errors} {skipped}")
-if suites == 0 or tests == 0:
-    raise SystemExit("ERROR: Zero unit test cases discovered/executed.")
-if failures > 0 or errors > 0:
-    raise SystemExit(f"ERROR: Unit tests reported failures={failures}, errors={errors}.")
-PYEOF
-          )
-          read -r SUITES TESTS FAILURES ERRORS SKIPPED <<< "$TEST_STATS"
-          echo "UNIT_TEST_SUITES=$SUITES" >> "$GITHUB_ENV"
-          echo "UNIT_TEST_CASES=$TESTS" >> "$GITHUB_ENV"
-          echo "UNIT_TEST_SKIPPED=$SKIPPED" >> "$GITHUB_ENV"
+          python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest"
 
-          echo "SUCCESS: Executed $TESTS unit tests across $SUITES suites (skipped=$SKIPPED, failures=0, errors=0)."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 

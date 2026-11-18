@@ -121,7 +121,7 @@ if [ -n "$APK_CERT_SHA256" ]; then
   fi
 fi
 
-AAB_HUMAN_SIZE="$(ls -lh "$AAB_PATH" | awk '{print $5}')"
+AAB_HUMAN_SIZE="$(numfmt --to=iec-i --suffix=B "$AAB_BYTES" 2>/dev/null || echo "${AAB_BYTES}B")"
 AAB_SHA256="$(sha256sum "$AAB_PATH" | awk '{print $1}')"
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then

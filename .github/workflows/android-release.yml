@@ -134,18 +134,23 @@ jobs:
           echo "FAILURE_CATEGORY=GRADLE_WRAPPER_FAILURE" >> "$GITHUB_ENV"
 
           for f in gradlew gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml \
-            ../.github/scripts/gradle-with-retry.sh ../.github/scripts/install-sdk.sh ../.github/scripts/verify-apk.sh ../.github/scripts/verify-aab.sh ../.github/scripts/verify-release-signing-preflight.sh; do
+            ../.github/scripts/gradle-with-retry.sh ../.github/scripts/install-sdk.sh ../.github/scripts/verify-apk.sh ../.github/scripts/verify-aab.sh ../.github/scripts/verify-release-signing-preflight.sh ../.github/scripts/verify-test-results.py; do
             if [ ! -f "$f" ]; then
               echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required file missing: $f"
               exit 1
             fi
           done
 
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required tool 'python3' missing on runner PATH."
+            exit 1
+          fi
+
           if ! grep -q "org.gradle.wrapper.GradleWrapperMain" gradlew; then
             echo "ERROR: [GRADLE_WRAPPER_FAILURE] android/gradlew is not a genuine Gradle wrapper script."
             exit 1
           fi
-          chmod +x gradlew ../.github/scripts/*.sh
+          chmod +x gradlew ../.github/scripts/*.sh ../.github/scripts/*.py
 
           WRAPPER_OUT=$(./gradlew --version --no-daemon --console=plain)
           echo "$WRAPPER_OUT"
@@ -285,30 +290,8 @@ jobs:
 
           ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --console=plain --stacktrace
 
-          TEST_STATS=$(python3 - "app/build/test-results/testDebugUnitTest" "app/build/test-results/testReleaseUnitTest" <<'PYEOF'
-import glob, os, sys, xml.etree.ElementTree as ET
-total_suites = total_tests = total_fail = total_err = total_skip = 0
-for d in sys.argv[1:]:
-    files = sorted(glob.glob(os.path.join(d, "TEST-*.xml")))
-    if not files:
-        raise SystemExit(f"ERROR: Zero XML test reports found in {d}")
-    for f in files:
-        total_suites += 1
-        root = ET.parse(f).getroot()
-        total_tests += int(root.attrib.get("tests", 0))
-        total_fail += int(root.attrib.get("failures", 0))
-        total_err += int(root.attrib.get("errors", 0))
-        total_skip += int(root.attrib.get("skipped", 0))
-print(f"{total_suites} {total_tests} {total_fail} {total_err} {total_skip}")
-if total_tests == 0 or total_fail > 0 or total_err > 0:
-    raise SystemExit(f"ERROR: Unit test failure (tests={total_tests}, failures={total_fail}, errors={total_err}).")
-PYEOF
-          )
-          read -r SUITES TESTS FAILURES ERRORS SKIPPED <<< "$TEST_STATS"
-          echo "UNIT_TEST_SUITES=$SUITES" >> "$GITHUB_ENV"
-          echo "UNIT_TEST_CASES=$TESTS" >> "$GITHUB_ENV"
+          python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest" "app/build/test-results/testReleaseUnitTest"
 
-          echo "SUCCESS: Executed $TESTS debug+release unit tests across $SUITES XML suites."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 

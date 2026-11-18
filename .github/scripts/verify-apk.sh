@@ -114,7 +114,7 @@ if [ -n "$EXPECTED_CERT_SHA256" ]; then
   fi
 fi
 
-APK_HUMAN_SIZE="$(ls -lh "$APK_PATH" | awk '{print $5}')"
+APK_HUMAN_SIZE="$(numfmt --to=iec-i --suffix=B "$APK_BYTES" 2>/dev/null || echo "${APK_BYTES}B")"
 APK_SHA256="$(sha256sum "$APK_PATH" | awk '{print $1}')"
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
