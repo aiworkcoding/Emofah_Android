@@ -136,9 +136,11 @@ object AuditAccountabilityPolicy {
             val existing = byId[remote.auditId]
             if (existing == null) {
                 byId[remote.auditId] = remote
-            } else if (existing.actorRoleLabel == null && remote.actorRoleLabel != null) {
+            } else if (existing.syncStatus != SyncState.SERVER_CONFIRMED ||
+                (existing.actorRoleLabel == null && remote.actorRoleLabel != null)
+            ) {
                 byId[remote.auditId] = existing.copy(
-                    actorRoleLabel = remote.actorRoleLabel,
+                    actorRoleLabel = existing.actorRoleLabel ?: remote.actorRoleLabel,
                     syncStatus = SyncState.SERVER_CONFIRMED,
                     sourceBadge = AuditSourceBadge.CLOUD_CONFIRMED,
                 )

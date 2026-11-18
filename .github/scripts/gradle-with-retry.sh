@@ -16,7 +16,7 @@ GRADLE_CMD="${GRADLE_WRAPPER_CMD:-./gradlew}"
 is_deterministic_failure() {
   local log_file="$1"
   grep -qiE \
-    "Multiple arguments were provided for command-line option|not found in configuration container|Problem configuring task|Task '.*' not found|Could not find method|Could not compile build file|Compilation error|Unresolved reference|Project '.*' not found|Unsupported class file major version|There were failing tests|Execution failed for task '.*:(compile|ksp|test|process|merge|package|bundle|assemble)|Received status code 40[0134]|status code: 40[0134]" \
+    "Multiple arguments were provided for command-line option|not found in configuration container|Problem configuring task|Task '.*' not found|Could not find method|Could not compile build file|Compilation error|Unresolved reference|No parameter with name|Project '.*' not found|Unsupported class file major version|There were failing tests|Execution failed for task '.*:(compile|ksp|test|process|merge|package|bundle|assemble)|> Task .*:(compile|ksp|test|process|merge|package|bundle|assemble).* FAILED|Received status code 40[0134]|status code: 40[0134]" \
     "$log_file"
 }
 
@@ -31,16 +31,32 @@ classify_failure() {
   local log_file="$1"
   if grep -qiE "Multiple arguments were provided|not found in configuration container|Problem configuring task|Task '.*' not found|Could not find method|Could not compile build file|Project '.*' not found" "$log_file"; then
     echo "GRADLE_CONFIGURATION_FAILURE"
-  elif grep -qiE "There were failing tests|AssertionError|Test .* FAILED" "$log_file"; then
-    echo "UNIT_TEST_FAILURE"
-  elif grep -qiE "Compilation error|Unresolved reference|ksp.*Kotlin FAILED|compile.*Kotlin FAILED|compile.*JavaWithJavac FAILED" "$log_file"; then
+  elif grep -qiE "> Task .*:(compile|ksp)[^ ]* FAILED|Execution failed for task '.*:(compile|ksp)|Compilation error|Unresolved reference|No parameter with name" "$log_file"; then
     echo "PROJECT_COMPILATION_FAILURE"
+  elif grep -qiE "> Task .*:test[^ ]* FAILED|Execution failed for task '.*:test|There were failing tests|AssertionError" "$log_file"; then
+    echo "UNIT_TEST_FAILURE"
   elif grep -qiE "RELEASE_SIGNING_FAILURE|keystore|signingConfig" "$log_file"; then
     echo "RELEASE_SIGNING_FAILURE"
-  elif grep -qiE "Could not resolve|Could not GET|Could not HEAD|dependency" "$log_file"; then
+  elif grep -qiE "> Task .*:(package|assemble|bundle|merge|process|dex|strip|shrink|minify)[^ ]* FAILED|Execution failed for task '.*:(package|assemble|bundle|merge|process|dex|strip|shrink|minify)" "$log_file"; then
+    echo "APK_GENERATION_FAILURE"
+  elif grep -qiE "Could not resolve|Could not GET|Could not HEAD|Could not find [^ ]+:[^ ]+:" "$log_file"; then
     echo "GRADLE_DEPENDENCY_FAILURE"
   else
     echo "GRADLE_EXECUTION_FAILURE"
+  fi
+}
+
+record_failure_env() {
+  local category="$1"
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "FAILURE_CATEGORY=$category" >> "$GITHUB_ENV"
+    if [ "$category" = "PROJECT_COMPILATION_FAILURE" ]; then
+      echo "FAILED_STAGE=${COMPILATION_STAGE_LABEL:-Kotlin/Java Compilation}" >> "$GITHUB_ENV"
+    elif [ "$category" = "UNIT_TEST_FAILURE" ]; then
+      echo "FAILED_STAGE=${UNIT_TEST_STAGE_LABEL:-Project Verification (Unit Tests)}" >> "$GITHUB_ENV"
+    elif [ "$category" = "APK_GENERATION_FAILURE" ]; then
+      echo "FAILED_STAGE=${APK_STAGE_LABEL:-APK Packaging}" >> "$GITHUB_ENV"
+    fi
   fi
 }
 
@@ -61,9 +77,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
 
   if is_deterministic_failure "$log_file"; then
     category="$(classify_failure "$log_file")"
-    if [ -n "${GITHUB_ENV:-}" ]; then
-      echo "FAILURE_CATEGORY=$category" >> "$GITHUB_ENV"
-    fi
+    record_failure_env "$category"
     echo "ERROR: [$category] Deterministic Gradle failure detected (exit code $rc); aborting without retry." >&2
     exit "$rc"
   fi
@@ -83,9 +97,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   fi
 
   category="$(classify_failure "$log_file")"
-  if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "FAILURE_CATEGORY=$category" >> "$GITHUB_ENV"
-  fi
+  record_failure_env "$category"
   echo "ERROR: [$category] Unretryable Gradle failure (exit code $rc); aborting without retry." >&2
   exit "$rc"
 done

@@ -6,12 +6,15 @@ import com.emofah.agencies.audit.SupabaseAuditClient
 import com.emofah.agencies.data.catalog.ProductMetadataExtractor
 import com.emofah.agencies.data.catalog.ProductRegistrationRpcOutcome
 import com.emofah.agencies.data.catalog.RegisterProductRpcRequest
+import com.emofah.agencies.data.catalog.SupabaseProductDto
 import com.emofah.agencies.data.catalog.SupabaseProductRegistrationClient
-import com.emofah.agencies.data.identity.StaffRole
 import com.emofah.agencies.data.local.entities.LocalAuditEventEntity
 import com.emofah.agencies.financial.AndroidFinancialEventRpcRequest
+import com.emofah.agencies.financial.FinancialEventDraft
 import com.emofah.agencies.financial.FinancialEventRpcOutcome
+import com.emofah.agencies.financial.FinancialEventType
 import com.emofah.agencies.financial.SupabaseFinancialEventClient
+import com.emofah.agencies.sales.StaffRole
 import com.emofah.agencies.orders.AndroidOrderConversionRpcRequest
 import com.emofah.agencies.orders.AndroidOrderStatusRpcRequest
 import com.emofah.agencies.orders.OrderConversionPolicy
@@ -82,18 +85,60 @@ class CrossPlatformStage105Test {
     @Test
     fun sharedCatalogueMetadataExtractionMatchesDesktopAndDatabaseInvariants() {
         // Variants must be preserved as distinct products with unique integer IDs
-        val mediumBook = ProductMetadataExtractor.extract("Kasuku Exercise Book (Medium) 200 pgs")
+        val mediumBook = ProductMetadataExtractor.toProductIdentity(
+            SupabaseProductDto(
+                id = 10L,
+                name = "Kasuku Exercise Book (Medium) 200 pgs",
+                qty = 12,
+                sellPrice = 150.0,
+                buyPrice = 95.0,
+                imageUrl = null,
+                category = "Stationery",
+                createdAt = "2026-11-16T00:00:00Z",
+                description = null,
+                discountPrice = 0.0,
+                isFeatured = false,
+            )
+        )
         assertEquals("Kasuku", mediumBook.brandHint)
-        assertEquals("Medium", mediumBook.variantLabel)
-        assertEquals("Kasuku Exercise Book", mediumBook.baseName)
+        assertEquals("Medium · 200 pgs", mediumBook.variantLabel)
+        assertEquals("Kasuku Exercise Book 200 pgs", mediumBook.baseName)
 
-        val largeBook = ProductMetadataExtractor.extract("Kasuku Exercise Book (Large) 200 pgs")
+        val largeBook = ProductMetadataExtractor.toProductIdentity(
+            SupabaseProductDto(
+                id = 11L,
+                name = "Kasuku Exercise Book (Large) 200 pgs",
+                qty = 8,
+                sellPrice = 220.0,
+                buyPrice = 150.0,
+                imageUrl = null,
+                category = "Stationery",
+                createdAt = "2026-11-16T00:00:00Z",
+                description = null,
+                discountPrice = 0.0,
+                isFeatured = false,
+            )
+        )
         assertEquals("Kasuku", largeBook.brandHint)
-        assertEquals("Large", largeBook.variantLabel)
-        assertEquals("Kasuku Exercise Book", largeBook.baseName)
+        assertEquals("Large · 200 pgs", largeBook.variantLabel)
+        assertEquals("Kasuku Exercise Book 200 pgs", largeBook.baseName)
 
         // Brands must match verified shared inventory brands (Bic, Kasuku, Deli, etc.)
-        val bicPen = ProductMetadataExtractor.extract("Bic Cristal Medium Ball Pen (Blue)")
+        val bicPen = ProductMetadataExtractor.toProductIdentity(
+            SupabaseProductDto(
+                id = 12L,
+                name = "Bic Cristal Medium Ball Pen (Blue)",
+                qty = 40,
+                sellPrice = 30.0,
+                buyPrice = 18.0,
+                imageUrl = null,
+                category = "Stationery",
+                createdAt = "2026-11-16T00:00:00Z",
+                description = null,
+                discountPrice = 0.0,
+                isFeatured = false,
+            )
+        )
         assertEquals("Bic", bicPen.brandHint)
         assertEquals("Blue", bicPen.variantLabel)
     }
@@ -113,6 +158,7 @@ class CrossPlatformStage105Test {
             buyPrice = 75.0,
             initialQty = 12,
             description = "Quick drying fluid",
+            localPhotoPath = null,
             actorId = "staff-01",
             deviceId = "android-device-01",
         )
@@ -196,8 +242,8 @@ class CrossPlatformStage105Test {
             unitSellPrice = 150.0,
             originalSellPrice = 150.0,
             priceOverrideReason = null,
-            isPriceOverridden = false,
         )
+        assertFalse(saleReq.isPriceOverridden)
         val salePayload = JSONObject(SupabaseSaleRpcClient.buildRpcPayloadJson(saleReq))
         assertEquals(42L, salePayload.getLong("p_product_id"))
         assertEquals(2, salePayload.getInt("p_qty"))
@@ -212,8 +258,8 @@ class CrossPlatformStage105Test {
             originalSellPrice = 150.0,
             priceOverrideReason = "Bulk discount approved by manager",
             actorRole = "SUPERVISOR",
-            isPriceOverridden = true,
         )
+        assertTrue(overrideSaleReq.isPriceOverridden)
         val overridePayload = JSONObject(SupabaseSaleRpcClient.buildRpcPayloadJson(overrideSaleReq))
         assertEquals(130.0, overridePayload.getDouble("p_unit_sell_price"), 0.001)
         assertEquals(150.0, overridePayload.getDouble("p_original_sell_price"), 0.001)
@@ -380,10 +426,16 @@ class CrossPlatformStage105Test {
     fun orderToSaleConversionContractMatchesSqlAndDomainInvariants() {
         val dummyOrder = StoreOrderRecord(
             id = "550e8400-e29b-41d4-a716-446655440000",
-            createdAtIso = "2026-11-16T10:00:00Z",
+            displayNumber = "#550E8400",
+            rawStatus = "ready",
             status = StoreOrderStatus.READY,
             totalPrice = 500.0,
+            createdAtIso = "2026-11-16T10:00:00Z",
+            createdAtEpochMs = 1794823200000L,
             items = emptyList(),
+            customerName = "Walk-in Customer",
+            customerPhone = null,
+            deliveryNote = null,
             isConvertedToSale = false,
         )
 
@@ -673,7 +725,7 @@ class CrossPlatformStage105Test {
             "resolved_products": [
                 {
                     "product_id": 15,
-                    "qty_added": 20,
+                    "qty": 20,
                     "server_qty_after": 95
                 }
             ],
@@ -686,7 +738,7 @@ class CrossPlatformStage105Test {
         assertEquals(2400.0, po.totalAmount, 0.001)
         assertEquals(1, po.resolvedProducts.size)
         assertEquals(15L, po.resolvedProducts[0].serverProductId)
-        assertEquals(20, po.resolvedProducts[0].qtyAdded)
+        assertEquals(20, po.resolvedProducts[0].qty)
         assertEquals(95, po.resolvedProducts[0].serverQtyAfter)
     }
 
@@ -759,13 +811,21 @@ class CrossPlatformStage105Test {
 
     @Test
     fun financialMonitoringRpcEnforcesDesktopAccountingSeparation() {
+        // Strict architectural rule: Android defaults financial drafts to PENDING_DESKTOP_RULES
+        // and transmits raw operational evidence without overriding server-side Desktop rules.
+        val draft = FinancialEventDraft(
+            eventType = FinancialEventType.M_PESA_RECEIVED,
+            amount = 1500.0,
+            referenceCode = "QGH8912KL3",
+        )
+        assertEquals("PENDING_DESKTOP_RULES", draft.category)
+
         val finReq = AndroidFinancialEventRpcRequest(
             clientEventId = "fin-uuid-001",
             idempotencyKey = "fin-idem-001",
-            eventType = "INFLOW",
-            category = "PENDING_DESKTOP_RULES",
+            eventType = "MPESA_SMS_EVENT",
+            direction = "INFLOW",
             amount = 1500.0,
-            classificationStatus = "PENDING_DESKTOP_RULES",
             referenceCode = "QGH8912KL3",
             channel = "MPESA_RECEIVED",
             counterparty = "John Doe 0712345678",
@@ -784,13 +844,11 @@ class CrossPlatformStage105Test {
         )
 
         val finPayload = JSONObject(SupabaseFinancialEventClient.buildRpcPayloadJson(finReq))
-
-        // Strict architectural rule: Android captures raw evidence with PENDING_DESKTOP_RULES.
-        // Final accounting classification is exclusively reserved for the Desktop system.
-        assertEquals("PENDING_DESKTOP_RULES", finPayload.getString("p_category"))
-        assertEquals("PENDING_DESKTOP_RULES", finPayload.getString("p_classification_status"))
+        assertEquals("INFLOW", finPayload.getString("p_direction"))
         assertEquals("QGH8912KL3", finPayload.getString("p_reference_code"))
         assertEquals(1500.0, finPayload.getDouble("p_amount"), 0.001)
+        assertEquals("VALID_PARSED", finPayload.getString("p_parse_status"))
+        assertFalse(finPayload.has("p_classification_status"))
 
         val finAckJson = """{
             "status": "COMMITTED",

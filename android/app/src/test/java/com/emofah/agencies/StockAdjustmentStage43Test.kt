@@ -151,11 +151,10 @@ class StockAdjustmentStage43Test {
                 eventId = "e1",
                 eventType = "STOCK_ADJUSTMENT",
                 entityId = "adj-1",
-                idempotencyKey = "idemp-adj-1",
                 payloadJson = relinkedPayload,
                 status = "QUEUED",
                 retryCount = 0,
-                nextRetryEpochMs = 0L,
+                nextRetryAtEpochMs = 0L,
                 actorId = "staff-1",
                 deviceId = "dev-1",
                 createdAtEpochMs = 0L,
@@ -166,5 +165,67 @@ class StockAdjustmentStage43Test {
         assertEquals(999L, relinkedReq?.productId)
         assertEquals(-3, relinkedReq?.deltaQty)
         assertEquals("DAMAGED", relinkedReq?.reasonCode)
+        assertEquals("idemp-adj-1", relinkedReq?.idempotencyKey)
+    }
+
+    @Test
+    fun canonicalStockAdjustmentQueuePayloadParsesAndPreservesIdempotencyAndAuditMetadata() {
+        val canonicalPayload = JSONObject().apply {
+            put("client_adjustment_id", "adj-canonical-1")
+            put("idempotency_key", "idemp-adj-canonical-1")
+            put("product_id", 55L)
+            put("delta_qty", -4)
+            put("reason_code", "THEFT_OR_SHRINKAGE")
+            put("notes", "Verified shelf count discrepancy")
+            put("actor_id", "sup-mary")
+            put("actor_role", "SUPERVISOR")
+            put("device_id", "handheld-2")
+            put("adjusted_at", "2026-11-18T08:30:00Z")
+        }.toString()
+
+        val event = com.emofah.agencies.data.local.entities.SyncQueueEventEntity(
+            eventId = "evt-stock-adj-adj-canonical-1",
+            eventType = "STOCK_ADJUSTMENT",
+            entityId = "adj-canonical-1",
+            payloadJson = canonicalPayload,
+            actorId = "sup-mary",
+            deviceId = "handheld-2",
+            status = "QUEUED",
+            retryCount = 0,
+            lastAttemptAtEpochMs = null,
+            nextRetryAtEpochMs = 1_000L,
+            createdAtEpochMs = 1_000L,
+        )
+
+        val parsed = SyncQueuePolicy.parseStockAdjustmentRpcRequest(event)
+        assertNotNull(parsed)
+        assertEquals(55L, parsed?.productId)
+        assertEquals(-4, parsed?.deltaQty)
+        assertEquals("THEFT_OR_SHRINKAGE", parsed?.reasonCode)
+        assertEquals("adj-canonical-1", parsed?.clientAdjustmentId)
+        assertEquals("idemp-adj-canonical-1", parsed?.idempotencyKey)
+        assertEquals("sup-mary", parsed?.actorId)
+        assertEquals("SUPERVISOR", parsed?.actorRole)
+        assertEquals("handheld-2", parsed?.deviceId)
+        assertEquals("2026-11-18T08:30:00Z", parsed?.adjustedAtIso)
+    }
+
+    @Test
+    fun stockAdjustmentDraftGeneratesStableIdempotencyKeyAndRetryBackoffAdvances() {
+        val draft = StockAdjustmentDraft(
+            productId = 12L,
+            productName = "Gloss Paint 1L",
+            currentAvailableQty = 8,
+            deltaQty = -1,
+            reason = StockAdjustmentReason.EXPIRED,
+            notes = "Past expiry date",
+            clientAdjustmentId = "adj-fixed-42",
+        )
+        assertEquals("idemp-adj-adj-fixed-42", draft.idempotencyKey)
+
+        val nextRetry1 = SyncQueuePolicy.computeNextRetryEpochMs(nowEpochMs = 10_000L, nextRetryCount = 1)
+        val nextRetry2 = SyncQueuePolicy.computeNextRetryEpochMs(nowEpochMs = 10_000L, nextRetryCount = 2)
+        assertEquals(10_000L + SyncQueuePolicy.BASE_BACKOFF_MS, nextRetry1)
+        assertEquals(10_000L + SyncQueuePolicy.BASE_BACKOFF_MS * 2, nextRetry2)
     }
 }

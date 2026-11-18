@@ -20,7 +20,6 @@ class ReliabilityRecoveryStage94Test {
         val drafts = listOf(
             PendingProductDraftEntity(
                 draftId = "draft-pending",
-                localTempProductId = -10L,
                 name = "A4 Glossy Paper",
                 category = "Stationery",
                 sellPrice = 500.0,
@@ -34,7 +33,6 @@ class ReliabilityRecoveryStage94Test {
             ),
             PendingProductDraftEntity(
                 draftId = "draft-confirmed",
-                localTempProductId = -11L,
                 name = "Confirmed Pen",
                 category = "Stationery",
                 sellPrice = 20.0,
@@ -78,6 +76,10 @@ class ReliabilityRecoveryStage94Test {
                 angle = "FRONT",
                 remoteUrl = "https://example.com/12.jpg",
                 localCachePath = "/files/reference_images/prod_12.img",
+                widthPx = 800,
+                heightPx = 600,
+                visualSignatureHex = "abcd1234",
+                isValid = true,
                 lastVerifiedAtEpochMs = oldTime,
             ),
         )
@@ -116,7 +118,6 @@ class ReliabilityRecoveryStage94Test {
         val drafts = listOf(
             PendingProductDraftEntity(
                 draftId = "draft-synced-1",
-                localTempProductId = -101L,
                 name = "Ruler 30cm",
                 category = "Stationery",
                 sellPrice = 50.0,

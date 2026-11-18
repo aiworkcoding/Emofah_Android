@@ -164,7 +164,7 @@ object MpesaMessageParser {
 
     private fun classifyChannel(lower: String): MpesaTransactionChannel {
         return when {
-            lower.contains("reversed") -> MpesaTransactionChannel.REVERSAL
+            lower.contains("reversed") || lower.contains("reversal") -> MpesaTransactionChannel.REVERSAL
             lower.contains("you have received") || lower.contains("received ksh") -> MpesaTransactionChannel.RECEIVED_MONEY
             lower.contains("for account") || lower.contains("paybill") -> MpesaTransactionChannel.PAYBILL
             lower.contains("paid to") -> MpesaTransactionChannel.BUY_GOODS_TILL
@@ -206,6 +206,12 @@ object MpesaMessageParser {
         channel: MpesaTransactionChannel,
         direction: String,
     ): String? {
+        if (channel == MpesaTransactionChannel.AIRTIME_BUNDLE) {
+            return "Safaricom Airtime"
+        }
+        if (channel == MpesaTransactionChannel.FULIZA_REPAYMENT) {
+            return "Safaricom Fuliza"
+        }
         val regex = when {
             channel == MpesaTransactionChannel.WITHDRAW_AGENT ->
                 Regex("""from\s+([A-Za-z0-9\s.&'-]{3,60}?)(?:\s+New\s+M-PESA|\s+on|\.)""", RegexOption.IGNORE_CASE)
@@ -218,12 +224,6 @@ object MpesaMessageParser {
             else ->
                 Regex("""(?:to|for)\s+([A-Za-z0-9\s.&'-]{3,48}?)(?:\.\s+on|\s+on|\s+for\s+account|\s+\d{1,2}/|\.)""", RegexOption.IGNORE_CASE)
         }
-        val matched = regex.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
-        if (matched != null) return matched
-        return when (channel) {
-            MpesaTransactionChannel.AIRTIME_BUNDLE -> "Safaricom Airtime"
-            MpesaTransactionChannel.FULIZA_REPAYMENT -> "Safaricom Fuliza"
-            else -> null
-        }
+        return regex.find(body)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
     }
 }

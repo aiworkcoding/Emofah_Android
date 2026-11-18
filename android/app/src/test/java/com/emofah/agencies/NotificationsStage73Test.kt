@@ -37,6 +37,9 @@ class NotificationsStage73Test {
         return ProductIdentity(
             id = id,
             name = name,
+            baseName = name,
+            variantLabel = null,
+            brandHint = null,
             category = "Stationery",
             sellPrice = 100.0,
             discountPrice = 0.0,
@@ -44,12 +47,9 @@ class NotificationsStage73Test {
             stockQty = 0,
             imageUrl = null,
             description = null,
-            isArchived = false,
             isFeatured = false,
             createdAt = "2026-11-16T00:00:00Z",
-            brandHint = null,
-            variantLabel = null,
-            aliases = emptyList(),
+            isArchived = false,
         )
     }
 
@@ -80,6 +80,7 @@ class NotificationsStage73Test {
     @Test
     fun evaluateSyncAttention_deduplicatesSameSignatureAndResetsWhenCleared() {
         val summaryWithConflict = SyncPassSummary(
+            attemptedCount = 3,
             syncedCount = 1,
             retryableCount = 0,
             conflictCount = 2,
@@ -104,6 +105,7 @@ class NotificationsStage73Test {
         assertEquals(sig1, sig2)
 
         val cleanSummary = SyncPassSummary(
+            attemptedCount = 3,
             syncedCount = 3,
             retryableCount = 0,
             conflictCount = 0,

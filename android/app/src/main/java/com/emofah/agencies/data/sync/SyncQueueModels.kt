@@ -388,16 +388,48 @@ object SyncQueuePolicy {
     fun parseStockAdjustmentRpcRequest(event: SyncQueueEventEntity): AndroidStockAdjustmentRpcRequest? {
         return runCatching {
             val json = JSONObject(event.payloadJson)
-            val clientAdjustmentId = json.optString("client_adjustment_id", event.entityId)
-            val idempotencyKey = json.optString("idempotency_key", "")
-            val productId = json.optLong("product_id", -1L)
-            val deltaQty = json.optInt("delta_qty", 0)
-            val reasonCode = json.optString("reason_code", "")
-            val notes = json.optString("notes", "")
-            val actorId = json.optString("actor_id", event.actorId)
-            val actorRole = json.optString("actor_role", "CASHIER")
-            val deviceId = json.optString("device_id", event.deviceId)
-            val adjustedAtIso = json.optString("adjusted_at", "")
+            val clientAdjustmentId = json.optString(
+                "client_adjustment_id",
+                json.optString("p_client_adjustment_id", event.entityId),
+            )
+            val idempotencyKey = json.optString(
+                "idempotency_key",
+                json.optString("p_idempotency_key", ""),
+            )
+            val productId = when {
+                json.has("product_id") -> json.optLong("product_id", -1L)
+                json.has("p_product_id") -> json.optLong("p_product_id", -1L)
+                else -> -1L
+            }
+            val deltaQty = when {
+                json.has("delta_qty") -> json.optInt("delta_qty", 0)
+                json.has("p_delta_qty") -> json.optInt("p_delta_qty", 0)
+                else -> 0
+            }
+            val reasonCode = json.optString(
+                "reason_code",
+                json.optString("p_reason_code", ""),
+            )
+            val notes = json.optString(
+                "notes",
+                json.optString("p_notes", ""),
+            )
+            val actorId = json.optString(
+                "actor_id",
+                json.optString("p_actor_id", event.actorId),
+            )
+            val actorRole = json.optString(
+                "actor_role",
+                json.optString("p_actor_role", "CASHIER"),
+            )
+            val deviceId = json.optString(
+                "device_id",
+                json.optString("p_device_id", event.deviceId),
+            )
+            val adjustedAtIso = json.optString(
+                "adjusted_at",
+                json.optString("p_adjusted_at", ""),
+            )
 
             if (clientAdjustmentId.isBlank() || idempotencyKey.isBlank() || productId <= 0L || deltaQty == 0) {
                 return null
@@ -421,7 +453,12 @@ object SyncQueuePolicy {
     fun relinkStockAdjustmentPayloadProductId(payloadJson: String, newProductId: Long): String {
         return runCatching {
             val root = JSONObject(payloadJson)
-            root.put("product_id", newProductId)
+            if (root.has("p_product_id")) {
+                root.put("p_product_id", newProductId)
+            }
+            if (root.has("product_id") || !root.has("p_product_id")) {
+                root.put("product_id", newProductId)
+            }
             root.toString()
         }.getOrDefault(payloadJson)
     }

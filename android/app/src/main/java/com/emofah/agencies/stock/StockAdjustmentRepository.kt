@@ -7,6 +7,7 @@ import com.emofah.agencies.data.local.entities.LocalStockProjectionEntity
 import com.emofah.agencies.data.local.entities.SyncQueueEventEntity
 import com.emofah.agencies.data.local.entities.SyncState
 import com.emofah.agencies.data.sync.SyncEventType
+import com.emofah.agencies.data.sync.SyncQueuePolicy
 import com.emofah.agencies.data.sync.SyncQueueStatus
 import com.emofah.agencies.sales.ConnectivityChecker
 import com.emofah.agencies.sales.DeviceIdentityProvider
@@ -224,22 +225,43 @@ class StockAdjustmentRepository(
             )
         }
 
+        val queuePayloadJson = JSONObject().apply {
+            put("client_adjustment_id", rpcRequest.clientAdjustmentId)
+            put("idempotency_key", rpcRequest.idempotencyKey)
+            put("product_id", rpcRequest.productId)
+            put("delta_qty", rpcRequest.deltaQty)
+            put("reason_code", rpcRequest.reasonCode)
+            put("notes", rpcRequest.notes)
+            put("actor_id", rpcRequest.actorId)
+            put("actor_role", rpcRequest.actorRole)
+            put("device_id", rpcRequest.deviceId)
+            put("adjusted_at", rpcRequest.adjustedAtIso)
+        }.toString()
+
+        val parentDraftEventId = if (draft.productId < 0L) {
+            syncQueueDao.getEventsByType(SyncEventType.PRODUCT_DRAFT)
+                .firstOrNull { evt ->
+                    SyncQueuePolicy.parseProductDraftPayload(evt)?.localTempProductId == draft.productId
+                }?.eventId
+        } else {
+            null
+        }
+
         val queueEventId = "evt-stock-adj-${draft.clientAdjustmentId}"
         val queueEvent = SyncQueueEventEntity(
             eventId = queueEventId,
             eventType = SyncEventType.STOCK_ADJUSTMENT,
             entityId = draft.clientAdjustmentId,
-            idempotencyKey = draft.idempotencyKey,
-            payloadJson = SupabaseStockAdjustmentClient.buildRpcPayloadJson(rpcRequest),
-            dependencyEventId = if (draft.productId < 0L) "evt-draft-${draft.productId}" else null,
-            status = SyncQueueStatus.QUEUED,
-            retryCount = 0,
-            lastAttemptEpochMs = null,
-            nextRetryEpochMs = nowMs,
-            failureReason = null,
-            serverAckId = null,
+            dependencyEventId = parentDraftEventId,
+            payloadJson = queuePayloadJson,
             actorId = actorId,
             deviceId = deviceId,
+            status = SyncQueueStatus.QUEUED,
+            retryCount = 0,
+            lastAttemptAtEpochMs = null,
+            nextRetryAtEpochMs = nowMs,
+            failureReason = null,
+            serverAckId = null,
             createdAtEpochMs = nowMs,
         )
         syncQueueDao.upsertEvent(queueEvent)

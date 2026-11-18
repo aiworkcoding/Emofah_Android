@@ -265,47 +265,64 @@ jobs:
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 8: Project Verification (Unit Tests)
+      # STAGE 8: Android Compilation & Stale Output Cleanup
       # =========================================================================
-      - name: "Stage 8: Clean stale APK outputs, record build timestamp & run unit tests"
-        id: unit_tests
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
-          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
-        run: |
-          set -euo pipefail
-          echo "FAILED_STAGE=Stage 8: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
-
-          rm -rf app/build/outputs/apk/debug app/build/test-results/testDebugUnitTest
-          BUILD_START_EPOCH=$(date +%s)
-          echo "BUILD_START_EPOCH=$BUILD_START_EPOCH" >> "$GITHUB_ENV"
-
-          ./gradlew :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
-
-          python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest"
-
-          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
-
-      # =========================================================================
-      # STAGE 9: Android Compilation
-      # =========================================================================
-      - name: "Stage 9: Compile Debug Kotlin & Java sources"
+      - name: "Stage 8: Clean stale APK outputs, record build timestamp & compile Debug sources"
         id: compile_android
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+          COMPILATION_STAGE_LABEL: "Stage 8: Android Compilation"
         run: |
           set -euo pipefail
-          echo "FAILED_STAGE=Stage 9: Android Compilation" >> "$GITHUB_ENV"
+          echo "FAILED_STAGE=Stage 8: Android Compilation" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=PROJECT_COMPILATION_FAILURE" >> "$GITHUB_ENV"
 
-          ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac --no-daemon --console=plain --stacktrace
+          rm -rf app/build/outputs/apk/debug app/build/test-results/testDebugUnitTest
+          BUILD_START_EPOCH=$(date +%s)
+          echo "BUILD_START_EPOCH=$BUILD_START_EPOCH" >> "$GITHUB_ENV"
+
+          ../.github/scripts/gradle-with-retry.sh :app:compileDebugKotlin :app:compileDebugJavaWithJavac --no-daemon --console=plain --stacktrace
 
           echo "SUCCESS: Debug Kotlin & Java compilation succeeded."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 9: Project Verification (Unit Tests)
+      # =========================================================================
+      - name: "Stage 9: Run unit tests & verify JUnit XML reports"
+        id: unit_tests
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+          COMPILATION_STAGE_LABEL: "Stage 9: Unit Test Compilation"
+          UNIT_TEST_STAGE_LABEL: "Stage 9: Project Verification (Unit Tests)"
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
+
+          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
+
+          set +e
+          python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest"
+          verify_rc=$?
+          set -e
+
+          if [ "$verify_rc" -ne 0 ]; then
+            if [ "$verify_rc" -eq 1 ]; then
+              echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+              echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
+            else
+              echo "FAILED_STAGE=Stage 9: Test Report Verification" >> "$GITHUB_ENV"
+              echo "FAILURE_CATEGORY=TEST_REPORT_VERIFICATION_FAILURE" >> "$GITHUB_ENV"
+            fi
+            exit "$verify_rc"
+          fi
+
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
@@ -318,12 +335,14 @@ jobs:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+          COMPILATION_STAGE_LABEL: "Stage 10: Android Compilation"
+          APK_STAGE_LABEL: "Stage 10: APK Generation"
         run: |
           set -euo pipefail
           echo "FAILED_STAGE=Stage 10: APK Generation" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=APK_GENERATION_FAILURE" >> "$GITHUB_ENV"
 
-          ./gradlew :app:assembleDebug --no-daemon --console=plain --stacktrace
+          ../.github/scripts/gradle-with-retry.sh :app:assembleDebug --no-daemon --console=plain --stacktrace
 
           echo "SUCCESS: assembleDebug completed."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
@@ -415,8 +434,8 @@ jobs:
             echo "| 5. Preflight & Metadata (\`compileSdk ${APP_COMPILE_SDK:-?}\`) | \`${{ steps.preflight.outcome }}\` |"
             echo "| 6. SDK Packages (\`build-tools ${ANDROID_BUILD_TOOLS_VERSION:-?}\`) | \`${{ steps.verify_sdk_packages.outcome }}\` |"
             echo "| 7. Dependency Resolution | \`${{ steps.resolve_deps.outcome }}\` |"
-            echo "| 8. Unit Tests (\`${UNIT_TEST_CASES:-0}\` cases / \`${UNIT_TEST_SUITES:-0}\` suites) | \`${{ steps.unit_tests.outcome }}\` |"
-            echo "| 9. Android Compilation | \`${{ steps.compile_android.outcome }}\` |"
+            echo "| 8. Android Compilation | \`${{ steps.compile_android.outcome }}\` |"
+            echo "| 9. Unit Tests (\`${UNIT_TEST_CASES:-0}\` cases / \`${UNIT_TEST_SUITES:-0}\` suites) | \`${{ steps.unit_tests.outcome }}\` |"
             echo "| 10. APK Generation (assembleDebug) | \`${{ steps.assemble_apk.outcome }}\` |"
             echo "| 11. APK Integrity Verification | \`${{ steps.verify_apk.outcome }}\` |"
             echo "| 12. Artifact Upload & Check | \`${{ steps.upload_apk.outcome }}\` / \`${{ steps.verify_upload.outcome }}\` |"

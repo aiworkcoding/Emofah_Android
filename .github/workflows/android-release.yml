@@ -270,35 +270,9 @@ jobs:
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 8: Project Verification (Unit Tests & Stale Cleanup)
+      # STAGE 8: Android Release Compilation & Stale Output Cleanup
       # =========================================================================
-      - name: "Stage 8: Clean stale release outputs, record build timestamp & run unit tests"
-        id: unit_tests
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
-          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
-        run: |
-          set -euo pipefail
-          echo "FAILED_STAGE=Stage 8: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
-
-          rm -rf app/build/outputs/apk/release app/build/outputs/bundle/release \
-            app/build/test-results/testDebugUnitTest app/build/test-results/testReleaseUnitTest
-          BUILD_START_EPOCH=$(date +%s)
-          echo "BUILD_START_EPOCH=$BUILD_START_EPOCH" >> "$GITHUB_ENV"
-
-          ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --console=plain --stacktrace
-
-          python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest" "app/build/test-results/testReleaseUnitTest"
-
-          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
-
-      # =========================================================================
-      # STAGE 9: Android Release Compilation
-      # =========================================================================
-      - name: "Stage 9: Compile Release Kotlin & Java sources"
+      - name: "Stage 8: Clean stale release outputs, record build timestamp & compile Release sources"
         id: compile_release
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
@@ -308,12 +282,55 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          COMPILATION_STAGE_LABEL: "Stage 8: Android Release Compilation"
         run: |
           set -euo pipefail
-          echo "FAILED_STAGE=Stage 9: Android Release Compilation" >> "$GITHUB_ENV"
+          echo "FAILED_STAGE=Stage 8: Android Release Compilation" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=PROJECT_COMPILATION_FAILURE" >> "$GITHUB_ENV"
 
-          ./gradlew :app:compileReleaseKotlin :app:compileReleaseJavaWithJavac --no-daemon --console=plain --stacktrace
+          rm -rf app/build/outputs/apk/release app/build/outputs/bundle/release \
+            app/build/test-results/testDebugUnitTest app/build/test-results/testReleaseUnitTest
+          BUILD_START_EPOCH=$(date +%s)
+          echo "BUILD_START_EPOCH=$BUILD_START_EPOCH" >> "$GITHUB_ENV"
+
+          ../.github/scripts/gradle-with-retry.sh :app:compileReleaseKotlin :app:compileReleaseJavaWithJavac --no-daemon --console=plain --stacktrace
+
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 9: Project Verification (Unit Tests)
+      # =========================================================================
+      - name: "Stage 9: Run unit tests & verify JUnit XML reports"
+        id: unit_tests
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
+          COMPILATION_STAGE_LABEL: "Stage 9: Unit Test Compilation"
+          UNIT_TEST_STAGE_LABEL: "Stage 9: Project Verification (Unit Tests)"
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
+
+          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --console=plain --stacktrace
+
+          set +e
+          python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest" "app/build/test-results/testReleaseUnitTest"
+          verify_rc=$?
+          set -e
+
+          if [ "$verify_rc" -ne 0 ]; then
+            if [ "$verify_rc" -eq 1 ]; then
+              echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+              echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
+            else
+              echo "FAILED_STAGE=Stage 9: Test Report Verification" >> "$GITHUB_ENV"
+              echo "FAILURE_CATEGORY=TEST_REPORT_VERIFICATION_FAILURE" >> "$GITHUB_ENV"
+            fi
+            exit "$verify_rc"
+          fi
 
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
@@ -331,12 +348,14 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          COMPILATION_STAGE_LABEL: "Stage 10: Android Release Compilation"
+          APK_STAGE_LABEL: "Stage 10: Release APK & AAB Generation"
         run: |
           set -euo pipefail
           echo "FAILED_STAGE=Stage 10: Release APK & AAB Generation" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=APK_GENERATION_FAILURE" >> "$GITHUB_ENV"
 
-          ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon --console=plain --stacktrace
+          ../.github/scripts/gradle-with-retry.sh :app:assembleRelease :app:bundleRelease --no-daemon --console=plain --stacktrace
 
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"

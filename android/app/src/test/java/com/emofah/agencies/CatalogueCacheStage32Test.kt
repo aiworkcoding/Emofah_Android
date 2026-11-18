@@ -41,7 +41,7 @@ class CatalogueCacheStage32Test {
                 category = "Stationery",
                 sellPrice = 80.0,
                 discountPrice = 0.0,
-                buyPrice = 60.0,
+                buyPrice = 50.0,
                 serverStockQty = 9,
                 imageUrl = null,
                 description = null,

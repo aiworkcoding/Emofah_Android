@@ -111,7 +111,6 @@ class OfflineTestingStage103Test {
         val drafts = listOf(
             PendingProductDraftEntity(
                 draftId = "draft-305",
-                localTempProductId = -15L,
                 name = "A4 Counter Book",
                 category = "Books",
                 sellPrice = 280.0,
@@ -268,7 +267,6 @@ class OfflineTestingStage103Test {
             drafts = listOf(
                 PendingProductDraftEntity(
                     draftId = "d-active",
-                    localTempProductId = -1L,
                     name = "Test Pen",
                     category = "Stationery",
                     sellPrice = 50.0,
@@ -289,6 +287,10 @@ class OfflineTestingStage103Test {
                     angle = "FRONT",
                     remoteUrl = null,
                     localCachePath = "/files/ref/prod_18.jpg",
+                    widthPx = 800,
+                    heightPx = 600,
+                    visualSignatureHex = "ef567890",
+                    isValid = true,
                     lastVerifiedAtEpochMs = stale,
                 )
             ),

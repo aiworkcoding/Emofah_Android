@@ -288,6 +288,7 @@ object ReliabilityRecoveryPolicy {
                     json.optLong("confirmed_product_id", 0L).takeIf { it != 0L }
                 else ->
                     json.optLong("product_id", 0L).takeIf { it != 0L }
+                        ?: json.optLong("p_product_id", 0L).takeIf { it != 0L }
             }
         }.getOrNull()
     }
