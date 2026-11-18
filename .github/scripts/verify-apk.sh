@@ -79,10 +79,27 @@ fi
 BADGING="$("$BUILD_TOOLS_DIR/aapt2" dump badging "$APK_PATH")"
 echo "$BADGING" | head -n 12
 
-PKG_LINE="$(printf '%s\n' "$BADGING" | grep -E "^package: " | head -n 1 || true)"
-ACTUAL_APP_ID="$(printf '%s' "$PKG_LINE" | sed -n "s/.*name='\([^']*\)'.*/\1/p")"
-ACTUAL_VERSION_CODE="$(printf '%s' "$PKG_LINE" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
-ACTUAL_VERSION_NAME="$(printf '%s' "$PKG_LINE" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+PARSED_META="$(python3 - "$BADGING" <<'PYEOF'
+import sys, re
+badging = sys.argv[1]
+pkg_match = re.search(r"^package:\s+name='([^']+)'", badging, re.MULTILINE)
+code_match = re.search(r"versionCode='([^']+)'", badging)
+name_match = re.search(r"versionName='([^']+)'", badging)
+
+app_id = pkg_match.group(1) if pkg_match else ""
+ver_code = code_match.group(1) if code_match else ""
+ver_name = name_match.group(1) if name_match else ""
+
+print(app_id)
+print(ver_code)
+print(ver_name)
+PYEOF
+)"
+
+ACTUAL_APP_ID="$(printf '%s\n' "$PARSED_META" | sed -n '1p')"
+ACTUAL_VERSION_CODE="$(printf '%s\n' "$PARSED_META" | sed -n '2p')"
+ACTUAL_VERSION_NAME="$(printf '%s\n' "$PARSED_META" | sed -n '3p')"
+
 
 if [ "$ACTUAL_APP_ID" != "$EXPECTED_APP_ID" ]; then
   echo "ERROR: [APK_VALIDATION_FAILURE] applicationId mismatch: got '$ACTUAL_APP_ID', expected '$EXPECTED_APP_ID'." >&2
