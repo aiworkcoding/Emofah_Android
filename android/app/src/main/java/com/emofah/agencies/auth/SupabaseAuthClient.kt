@@ -22,7 +22,7 @@ interface SupabaseAuthGateway {
 }
 
 /**
- * Stage 9.1 — Direct GoTrue REST client (`/auth/v1/*`) using java.net.HttpURLConnection + org.json.
+ * Stage 9.1 — Direct GoTrue REST client (`/auth/v1/<endpoint>`) using java.net.HttpURLConnection + org.json.
  * Never embeds service_role keys.
  */
 class SupabaseAuthClient(

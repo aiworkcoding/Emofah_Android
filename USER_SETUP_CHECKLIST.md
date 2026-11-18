@@ -75,8 +75,8 @@ AI Studio runs in a Linux web container without JDK 17 / Android SDK / `adb`, so
 
 ### Option A — GitHub Actions CI (Easiest, No Local Android Studio Required)
 - [ ] Push this repo to GitHub (`main` or `master` branch).
-- [ ] Open **GitHub Repo → Actions → "Build Emofah Android APK" → Run workflow** (uses `.github/workflows/android-apk.yml` with JDK 17, Android SDK 34, Gradle 8.9).
-- [ ] Download the generated artifact **`emofah-agencies-debug-apk`** (`app-debug.apk`).
+- [ ] Open **GitHub Repo → Actions → "Build Emofah Android Debug APK" → Run workflow** (uses `.github/workflows/android-apk.yml` with JDK 17, Android SDK 34, Gradle 8.9).
+- [ ] Download the generated artifact **`emofah-android-debug`** (`app-debug.apk`).
 
 ### Option B — Local Android Studio / CLI
 - [ ] Install **JDK 17** and **Android SDK Platform 34** (Min SDK 26 / Android 8.0+).
@@ -85,7 +85,7 @@ AI Studio runs in a Linux web container without JDK 17 / Android SDK / `adb`, so
 - [ ] Build & run unit tests:
   ```bash
   cd android
-  gradle testDebugUnitTest assembleDebug
+  ./gradlew testDebugUnitTest assembleDebug
   ```
 - [ ] Output APK path: `android/app/build/outputs/apk/debug/app-debug.apk`
 

@@ -60,13 +60,31 @@ jobs:
             exit 1
           fi
 
+          for tool in keytool jarsigner jar; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              echo "ERROR: [JAVA_VERSION_MISMATCH] Required JDK tool '$tool' missing."
+              exit 1
+            fi
+          done
+
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 3: Android SDK Setup
+      # STAGE 3: Gradle Setup & Wrapper Validation
       # =========================================================================
-      - name: "Stage 3: Set up Android SDK command-line tools"
+      - name: "Stage 3: Configure Gradle caching & wrapper validation"
+        id: setup_gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          validate-wrappers: true
+          cache-cleanup: on-success
+          add-job-summary: always
+
+      # =========================================================================
+      # STAGE 4: Android SDK Command-Line Tools & Licences
+      # =========================================================================
+      - name: "Stage 4a: Set up Android SDK command-line tools"
         id: setup_android
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
@@ -75,10 +93,7 @@ jobs:
           log-accepted-android-sdk-licenses: 'true'
           packages: ''
 
-      # =========================================================================
-      # STAGE 4: SDK Licence Verification
-      # =========================================================================
-      - name: "Stage 4: Verify Android SDK licences"
+      - name: "Stage 4b: Verify Android SDK licences"
         id: verify_licenses
         run: |
           set -euo pipefail
@@ -106,90 +121,22 @@ jobs:
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 5: SDK Dependency Installation & Verification
+      # STAGE 5: Preflight Gradle Wrapper, Authoritative Metadata & Release Signing
       # =========================================================================
-      - name: "Stage 5: Install & verify required Android SDK packages"
-        id: verify_sdk_packages
-        run: |
-          set -euo pipefail
-          echo "FAILED_STAGE=Stage 5: SDK Dependency Verification" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=SDK_SETUP_FAILURE" >> "$GITHUB_ENV"
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          REQUIRED_PACKAGES=("platform-tools" "platforms;android-34" "build-tools;34.0.0")
-
-          max_attempts=3
-          attempt=1
-          log_file=$(mktemp)
-          installed=false
-
-          while [ "$attempt" -le "$max_attempts" ]; do
-            echo "Installing Android SDK packages (attempt $attempt/$max_attempts)..."
-            if printf 'y\n%.0s' {1..30} | sdkmanager --install "${REQUIRED_PACKAGES[@]}" 2>&1 | tee "$log_file"; then
-              installed=true
-              break
-            fi
-            if grep -qiE "Failed to find package|Unknown package" "$log_file"; then
-              echo "FAILURE_CATEGORY=SDK_PACKAGE_NOT_FOUND" >> "$GITHUB_ENV"
-              echo "ERROR: [SDK_PACKAGE_NOT_FOUND] Missing SDK package detected; aborting."
-              rm -f "$log_file"
-              exit 1
-            fi
-            if [ "$attempt" -lt "$max_attempts" ]; then
-              sleep 10
-            fi
-            attempt=$((attempt + 1))
-          done
-          rm -f "$log_file"
-
-          if [ "$installed" != "true" ]; then
-            echo "ERROR: [SDK_SETUP_FAILURE] SDK package installation failed after $max_attempts attempts."
-            exit 1
-          fi
-
-          for required_file in \
-            "$SDK_ROOT/platform-tools/adb" \
-            "$SDK_ROOT/platforms/android-34/android.jar" \
-            "$SDK_ROOT/build-tools/34.0.0/aapt2" \
-            "$SDK_ROOT/build-tools/34.0.0/apksigner" \
-            "$SDK_ROOT/build-tools/34.0.0/d8"; do
-            if [ ! -e "$required_file" ]; then
-              echo "ERROR: [SDK_SETUP_FAILURE] Missing required SDK component: $required_file"
-              exit 1
-            fi
-          done
-
-          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
-
-      # =========================================================================
-      # STAGE 6: Gradle Setup, Preflight & Mandatory Release Signing Validation
-      # =========================================================================
-      - name: "Stage 6a: Configure Gradle caching & wrapper validation"
-        id: setup_gradle
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-        with:
-          validate-wrappers: true
-          cache-cleanup: on-success
-          add-job-summary: always
-
-      - name: "Stage 6b: Preflight Gradle wrapper & mandatory release signing check"
-        id: preflight_signing
+      - name: "Stage 5a: Preflight Gradle wrapper & authoritative metadata"
+        id: preflight_gradle
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
         run: |
           set -euo pipefail
-          echo "FAILED_STAGE=Stage 6: Preflight & Release Signing Validation" >> "$GITHUB_ENV"
+          echo "FAILED_STAGE=Stage 5: Gradle Preflight" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=GRADLE_WRAPPER_FAILURE" >> "$GITHUB_ENV"
 
-          for f in gradlew gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml; do
+          for f in gradlew gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties settings.gradle.kts build.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml \
+            ../.github/scripts/gradle-with-retry.sh ../.github/scripts/install-sdk.sh ../.github/scripts/verify-apk.sh ../.github/scripts/verify-aab.sh ../.github/scripts/verify-release-signing-preflight.sh; do
             if [ ! -f "$f" ]; then
-              echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required file missing: android/$f"
+              echo "ERROR: [GRADLE_WRAPPER_FAILURE] Required file missing: $f"
               exit 1
             fi
           done
@@ -198,57 +145,102 @@ jobs:
             echo "ERROR: [GRADLE_WRAPPER_FAILURE] android/gradlew is not a genuine Gradle wrapper script."
             exit 1
           fi
-          chmod +x gradlew
+          chmod +x gradlew ../.github/scripts/*.sh
 
           WRAPPER_OUT=$(./gradlew --version --no-daemon --console=plain)
+          echo "$WRAPPER_OUT"
           if ! echo "$WRAPPER_OUT" | grep -q "Gradle 8.9"; then
             echo "ERROR: [GRADLE_WRAPPER_FAILURE] Expected Gradle 8.9 from wrapper."
             exit 1
           fi
+          if ! echo "$WRAPPER_OUT" | grep -qE "JVM:\s+17\.|Launcher JVM:\s+17\."; then
+            echo "FAILURE_CATEGORY=JAVA_VERSION_MISMATCH" >> "$GITHUB_ENV"
+            echo "ERROR: [JAVA_VERSION_MISMATCH] Gradle wrapper is not running on JDK 17."
+            exit 1
+          fi
 
           if [ -n "${SUPABASE_URL:-}" ] && [[ ! "$SUPABASE_URL" =~ ^https:// ]]; then
+            echo "FAILURE_CATEGORY=PROJECT_CONFIGURATION_FAILURE" >> "$GITHUB_ENV"
             echo "ERROR: [PROJECT_CONFIGURATION_FAILURE] vars.SUPABASE_URL must start with https://"
             exit 1
           fi
           if [ -n "${CLOUD_RECOGNITION_URL:-}" ] && [[ ! "$CLOUD_RECOGNITION_URL" =~ ^https:// ]]; then
+            echo "FAILURE_CATEGORY=PROJECT_CONFIGURATION_FAILURE" >> "$GITHUB_ENV"
             echo "ERROR: [PROJECT_CONFIGURATION_FAILURE] vars.CLOUD_RECOGNITION_URL must start with https://"
             exit 1
           fi
 
-          # Enforce mandatory production release signing — NEVER fall back to unsigned builds
+          echo "FAILURE_CATEGORY=PROJECT_CONFIGURATION_FAILURE" >> "$GITHUB_ENV"
+          META_OUT=$(./gradlew -q :app:printAppMetadata --no-daemon --console=plain)
+          echo "$META_OUT"
+
+          APP_ID=$(printf '%s\n' "$META_OUT" | awk -F= '/^APPLICATION_ID=/{print $2}')
+          APP_VERSION_CODE=$(printf '%s\n' "$META_OUT" | awk -F= '/^VERSION_CODE=/{print $2}')
+          APP_VERSION_NAME=$(printf '%s\n' "$META_OUT" | awk -F= '/^VERSION_NAME=/{print $2}')
+          APP_COMPILE_SDK=$(printf '%s\n' "$META_OUT" | awk -F= '/^COMPILE_SDK=/{print $2}')
+
+          if [ -z "$APP_ID" ] || [ -z "$APP_VERSION_CODE" ] || [ "$APP_VERSION_CODE" -le 0 ] 2>/dev/null || [ -z "$APP_VERSION_NAME" ] || [ -z "$APP_COMPILE_SDK" ]; then
+            echo "ERROR: [PROJECT_CONFIGURATION_FAILURE] Invalid Gradle metadata from :app:printAppMetadata"
+            exit 1
+          fi
+
+          {
+            echo "APP_ID=$APP_ID"
+            echo "APP_VERSION_CODE=$APP_VERSION_CODE"
+            echo "APP_VERSION_NAME=$APP_VERSION_NAME"
+            echo "APP_COMPILE_SDK=$APP_COMPILE_SDK"
+          } >> "$GITHUB_ENV"
+
+          tasks_file=$(mktemp)
+          ./gradlew :app:tasks --all --no-daemon --console=plain > "$tasks_file"
+          for expected_task in assembleRelease bundleRelease compileReleaseKotlin compileReleaseJavaWithJavac testDebugUnitTest testReleaseUnitTest; do
+            if ! grep -Eq "(^|[[:space:]])${expected_task}([[:space:]]|$)" "$tasks_file"; then
+              echo "ERROR: [GRADLE_WRAPPER_FAILURE] Expected task '$expected_task' not found in :app."
+              rm -f "$tasks_file"
+              exit 1
+            fi
+          done
+          rm -f "$tasks_file"
+
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      - name: "Stage 5b: Mandatory release signing preflight (keystore, alias, storepass & keypass signing probe)"
+        id: preflight_signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 5b: Release Signing Preflight" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=RELEASE_SIGNING_FAILURE" >> "$GITHUB_ENV"
-          missing_secrets=()
-          [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] && missing_secrets+=("ANDROID_KEYSTORE_BASE64")
-          [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] && missing_secrets+=("ANDROID_KEYSTORE_PASSWORD")
-          [ -z "${ANDROID_KEY_ALIAS:-}" ] && missing_secrets+=("ANDROID_KEY_ALIAS")
-          [ -z "${ANDROID_KEY_PASSWORD:-}" ] && missing_secrets+=("ANDROID_KEY_PASSWORD")
 
-          if [ "${#missing_secrets[@]}" -gt 0 ]; then
-            echo "ERROR: [RELEASE_SIGNING_FAILURE] Missing required GitHub Secrets for release signing: ${missing_secrets[*]}"
-            echo "Configure these secrets in Repository Settings -> Secrets and variables -> Actions."
-            exit 1
-          fi
+          ../.github/scripts/verify-release-signing-preflight.sh release.keystore
 
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > release.keystore
-          if [ ! -s release.keystore ]; then
-            echo "ERROR: [RELEASE_SIGNING_FAILURE] Decoded release.keystore is empty."
-            exit 1
-          fi
-
-          if ! keytool -list -keystore release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
-            echo "ERROR: [RELEASE_SIGNING_FAILURE] Keystore validation failed for alias '$ANDROID_KEY_ALIAS' (wrong password, corrupt base64, or missing alias)."
-            rm -f release.keystore
-            exit 1
-          fi
-
-          echo "SUCCESS: Release keystore and signing credentials verified."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 7: Gradle Dependency Resolution
+      # STAGE 6: Dynamic SDK Package Installation & Verification
       # =========================================================================
-      - name: "Stage 7: Resolve Gradle plugins & Android dependencies"
+      - name: "Stage 6: Install & verify Android SDK packages (compileSdk ${{ env.APP_COMPILE_SDK }})"
+        id: verify_sdk_packages
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 6: SDK Dependency Verification" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=SDK_SETUP_FAILURE" >> "$GITHUB_ENV"
+
+          ../.github/scripts/install-sdk.sh "$APP_COMPILE_SDK"
+
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      # =========================================================================
+      # STAGE 7: Gradle Dependency Resolution (Separate Valid Configurations)
+      # =========================================================================
+      - name: "Stage 7: Resolve Release runtime & unit-test dependency configurations"
         id: resolve_deps
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
@@ -259,35 +251,23 @@ jobs:
           echo "FAILED_STAGE=Stage 7: Gradle Dependency Resolution" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=GRADLE_DEPENDENCY_FAILURE" >> "$GITHUB_ENV"
 
-          max_attempts=3
-          attempt=1
-          log_file=$(mktemp)
+          echo "--- Resolving :app releaseRuntimeClasspath ---"
+          ../.github/scripts/gradle-with-retry.sh :app:dependencies --configuration releaseRuntimeClasspath --no-daemon --console=plain >/dev/null
 
-          while [ "$attempt" -le "$max_attempts" ]; do
-            echo "Resolving :app release dependencies (attempt $attempt/$max_attempts)..."
-            if ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --configuration testDebugUnitTestRuntimeClasspath --no-daemon --console=plain >"$log_file" 2>&1; then
-              rm -f "$log_file"
-              echo "FAILED_STAGE=" >> "$GITHUB_ENV"
-              echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
-              exit 0
-            fi
-            cat "$log_file"
-            if grep -qiE "Could not GET|Read timed out|Connection reset|UnknownHostException|ConnectException|status code: 50[0-4]|502 Bad Gateway|503 Service|504 Gateway" "$log_file"; then
-              if [ "$attempt" -lt "$max_attempts" ]; then
-                sleep 15
-                attempt=$((attempt + 1))
-                continue
-              fi
-            fi
-            echo "ERROR: [GRADLE_DEPENDENCY_FAILURE] Dependency resolution failed."
-            rm -f "$log_file"
-            exit 1
-          done
+          echo "--- Resolving :app releaseUnitTestRuntimeClasspath ---"
+          ../.github/scripts/gradle-with-retry.sh :app:dependencies --configuration releaseUnitTestRuntimeClasspath --no-daemon --console=plain >/dev/null
+
+          echo "--- Resolving :app debugUnitTestRuntimeClasspath ---"
+          ../.github/scripts/gradle-with-retry.sh :app:dependencies --configuration debugUnitTestRuntimeClasspath --no-daemon --console=plain >/dev/null
+
+          echo "SUCCESS: All release and unit-test runtime classpaths resolved cleanly."
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 8: Project Verification (Unit Tests)
+      # STAGE 8: Project Verification (Unit Tests & Stale Cleanup)
       # =========================================================================
-      - name: "Stage 8: Clean stale release outputs & run unit tests"
+      - name: "Stage 8: Clean stale release outputs, record build timestamp & run unit tests"
         id: unit_tests
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
@@ -296,11 +276,39 @@ jobs:
         run: |
           set -euo pipefail
           echo "FAILED_STAGE=Stage 8: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
-          echo "FAILURE_CATEGORY=PROJECT_COMPILATION_FAILURE" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
 
-          rm -rf app/build/outputs/apk/release app/build/outputs/bundle/release
-          ./gradlew :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
+          rm -rf app/build/outputs/apk/release app/build/outputs/bundle/release \
+            app/build/test-results/testDebugUnitTest app/build/test-results/testReleaseUnitTest
+          BUILD_START_EPOCH=$(date +%s)
+          echo "BUILD_START_EPOCH=$BUILD_START_EPOCH" >> "$GITHUB_ENV"
 
+          ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --console=plain --stacktrace
+
+          TEST_STATS=$(python3 - "app/build/test-results/testDebugUnitTest" "app/build/test-results/testReleaseUnitTest" <<'PYEOF'
+import glob, os, sys, xml.etree.ElementTree as ET
+total_suites = total_tests = total_fail = total_err = total_skip = 0
+for d in sys.argv[1:]:
+    files = sorted(glob.glob(os.path.join(d, "TEST-*.xml")))
+    if not files:
+        raise SystemExit(f"ERROR: Zero XML test reports found in {d}")
+    for f in files:
+        total_suites += 1
+        root = ET.parse(f).getroot()
+        total_tests += int(root.attrib.get("tests", 0))
+        total_fail += int(root.attrib.get("failures", 0))
+        total_err += int(root.attrib.get("errors", 0))
+        total_skip += int(root.attrib.get("skipped", 0))
+print(f"{total_suites} {total_tests} {total_fail} {total_err} {total_skip}")
+if total_tests == 0 or total_fail > 0 or total_err > 0:
+    raise SystemExit(f"ERROR: Unit test failure (tests={total_tests}, failures={total_fail}, errors={total_err}).")
+PYEOF
+          )
+          read -r SUITES TESTS FAILURES ERRORS SKIPPED <<< "$TEST_STATS"
+          echo "UNIT_TEST_SUITES=$SUITES" >> "$GITHUB_ENV"
+          echo "UNIT_TEST_CASES=$TESTS" >> "$GITHUB_ENV"
+
+          echo "SUCCESS: Executed $TESTS debug+release unit tests across $SUITES XML suites."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
@@ -351,61 +359,47 @@ jobs:
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 11: Release Binary Integrity & Signature Verification
+      # STAGE 11: Release Binary Integrity, Metadata & Identity Verification
       # =========================================================================
-      - name: "Stage 11: Verify signed Release APK & AAB integrity"
-        id: verify_release
+      - name: "Stage 11a: Verify signed Release APK integrity & identity"
+        id: verify_release_apk
         run: |
           set -euo pipefail
-          echo "FAILED_STAGE=Stage 11: Release Binary Verification" >> "$GITHUB_ENV"
+          echo "FAILED_STAGE=Stage 11a: Release APK Verification" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=APK_VALIDATION_FAILURE" >> "$GITHUB_ENV"
 
-          APK_PATH="app/build/outputs/apk/release/app-release.apk"
-          AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
+          ../.github/scripts/verify-apk.sh \
+            "app/build/outputs/apk/release/app-release.apk" \
+            "$APP_ID" \
+            "$APP_VERSION_CODE" \
+            "$APP_VERSION_NAME" \
+            "$BUILD_START_EPOCH" \
+            "$EXPECTED_CERT_SHA256"
 
-          if [ ! -f "$APK_PATH" ]; then
-            echo "ERROR: [APK_GENERATION_FAILURE] Signed release APK missing at $APK_PATH"
-            echo "FAILURE_CATEGORY=APK_GENERATION_FAILURE" >> "$GITHUB_ENV"
-            exit 1
-          fi
-          if [ ! -f "$AAB_PATH" ]; then
-            echo "ERROR: [APK_GENERATION_FAILURE] Signed release AAB missing at $AAB_PATH"
-            echo "FAILURE_CATEGORY=APK_GENERATION_FAILURE" >> "$GITHUB_ENV"
-            exit 1
-          fi
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
-          unzip -tqq "$APK_PATH"
-          unzip -tqq "$AAB_PATH"
+      - name: "Stage 11b: Verify signed Release AAB bundle validity, manifest & signer identity"
+        id: verify_release_aab
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 11b: Release AAB Verification" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=RELEASE_SIGNING_FAILURE" >> "$GITHUB_ENV"
 
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          "$SDK_ROOT/build-tools/34.0.0/aapt2" dump badging "$APK_PATH" | grep -q "package: name='com.emofah.agencies'"
-
-          echo "Verifying APK signature..."
-          if ! "$SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$APK_PATH"; then
-            echo "FAILURE_CATEGORY=RELEASE_SIGNING_FAILURE" >> "$GITHUB_ENV"
-            echo "ERROR: [RELEASE_SIGNING_FAILURE] Release APK signature verification failed."
-            exit 1
-          fi
-
-          echo "Verifying AAB signature..."
-          if ! jarsigner -verify -strict "$AAB_PATH"; then
-            echo "FAILURE_CATEGORY=RELEASE_SIGNING_FAILURE" >> "$GITHUB_ENV"
-            echo "ERROR: [RELEASE_SIGNING_FAILURE] Release AAB signature verification failed."
-            exit 1
-          fi
-
-          {
-            echo "apk_size=$(ls -lh "$APK_PATH" | awk '{print $5}')"
-            echo "apk_sha256=$(sha256sum "$APK_PATH" | awk '{print $1}')"
-            echo "aab_size=$(ls -lh "$AAB_PATH" | awk '{print $5}')"
-            echo "aab_sha256=$(sha256sum "$AAB_PATH" | awk '{print $1}')"
-          } >> "$GITHUB_OUTPUT"
+          ../.github/scripts/verify-aab.sh \
+            "app/build/outputs/bundle/release/app-release.aab" \
+            "$APP_ID" \
+            "$APP_VERSION_CODE" \
+            "$APP_VERSION_NAME" \
+            "$EXPECTED_CERT_SHA256" \
+            "${{ steps.verify_release_apk.outputs.apk_cert_sha256 }}" \
+            "$BUILD_START_EPOCH"
 
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 12: Artifact Upload & Tag-Guarded GitHub Release
+      # STAGE 12: Artifact Upload, Failure Reports & Tag-Guarded GitHub Release
       # =========================================================================
       - name: "Stage 12a: Upload Release Artifacts"
         id: upload_release_artifacts
@@ -419,7 +413,24 @@ jobs:
           retention-days: 90
           overwrite: true
 
-      - name: "Stage 12b: Create GitHub Release (tag pushes only)"
+      - name: "Stage 12b: Verify Release artifact upload outputs"
+        id: verify_upload
+        run: |
+          set -euo pipefail
+          echo "FAILED_STAGE=Stage 12: Artifact Upload Verification" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=ARTIFACT_PUBLICATION_FAILURE" >> "$GITHUB_ENV"
+
+          if [ -z "${{ steps.upload_release_artifacts.outputs.artifact-id }}" ]; then
+            echo "ERROR: [ARTIFACT_PUBLICATION_FAILURE] upload-artifact did not emit an artifact-id."
+            exit 1
+          fi
+          echo "Uploaded release artifact ID: ${{ steps.upload_release_artifacts.outputs.artifact-id }}"
+          echo "Artifact digest: ${{ steps.upload_release_artifacts.outputs.artifact-digest }}"
+
+          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
+
+      - name: "Stage 12c: Create GitHub Release (tag pushes only)"
         id: github_release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
@@ -432,6 +443,18 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Stage 12d: Upload unit test report on failure"
+        id: upload_test_reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: emofah-android-release-test-reports
+          path: |
+            android/app/build/reports/tests/testDebugUnitTest
+            android/app/build/reports/tests/testReleaseUnitTest
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: "Cleanup decoded keystore"
         if: always()
@@ -448,13 +471,19 @@ jobs:
             echo "## Emofah Android Release Build Summary"
             echo ""
             echo "- **Overall Status:** \`${{ job.status }}\`"
-            echo "- **Ref:** \`${{ github.ref }}\`"
+            echo "- **Ref:** \`${{ github.ref }}\` (\`${{ github.sha }}\`)"
             if [ "${{ job.status }}" != "success" ]; then
               echo "- **Failed Stage:** \`${FAILED_STAGE:-Unknown (inspect step logs)}\`"
               echo "- **Diagnostic Category:** \`${FAILURE_CATEGORY:-UNCLASSIFIED_FAILURE}\`"
             fi
-            if [ "${{ steps.verify_release.outcome }}" = "success" ]; then
-              echo "- **Signed APK:** \`${{ steps.verify_release.outputs.apk_size }}\` (SHA-256: \`${{ steps.verify_release.outputs.apk_sha256 }}\`)"
-              echo "- **Signed AAB:** \`${{ steps.verify_release.outputs.aab_size }}\` (SHA-256: \`${{ steps.verify_release.outputs.aab_sha256 }}\`)"
+            if [ "${{ steps.verify_release_apk.outcome }}" = "success" ] && [ "${{ steps.verify_release_aab.outcome }}" = "success" ]; then
+              echo ""
+              echo "### Verified Signed Release Binaries"
+              echo "- **Application ID:** \`${{ steps.verify_release_apk.outputs.apk_application_id }}\`"
+              echo "- **Version:** \`${{ steps.verify_release_apk.outputs.apk_version_name }}\` (versionCode \`${{ steps.verify_release_apk.outputs.apk_version_code }}\`)"
+              echo "- **Signed APK:** \`${{ steps.verify_release_apk.outputs.apk_size_human }}\` (\`${{ steps.verify_release_apk.outputs.apk_size_bytes }}\` bytes, SHA-256: \`${{ steps.verify_release_apk.outputs.apk_sha256 }}\`)"
+              echo "- **Signed AAB:** \`${{ steps.verify_release_aab.outputs.aab_size_human }}\` (\`${{ steps.verify_release_aab.outputs.aab_size_bytes }}\` bytes, SHA-256: \`${{ steps.verify_release_aab.outputs.aab_sha256 }}\`)"
+              echo "- **Signer Cert SHA-256:** \`${{ steps.verify_release_aab.outputs.aab_cert_sha256 }}\`"
+              echo "- **Artifact ID:** \`${{ steps.upload_release_artifacts.outputs.artifact-id }}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

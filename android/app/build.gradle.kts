@@ -18,6 +18,10 @@ fun readConfigValue(key: String): String {
     return (System.getenv(key) ?: localProps.getProperty(key) ?: "").trim()
 }
 
+fun escapeBuildConfigString(value: String): String {
+    return value.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 android {
     namespace = "com.emofah.agencies"
     compileSdk = 34
@@ -34,9 +38,9 @@ android {
         val supabaseUrl = readConfigValue("SUPABASE_URL").ifBlank { "https://nbmmfdiqywmkjaltezro.supabase.co" }
         val supabaseAnonKey = readConfigValue("SUPABASE_ANON_KEY").ifBlank { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs" }
         val cloudRecognitionUrl = readConfigValue("CLOUD_RECOGNITION_URL")
-        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
-        buildConfigField("String", "CLOUD_RECOGNITION_URL", "\"$cloudRecognitionUrl\"")
+        buildConfigField("String", "SUPABASE_URL", "\"${escapeBuildConfigString(supabaseUrl)}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${escapeBuildConfigString(supabaseAnonKey)}\"")
+        buildConfigField("String", "CLOUD_RECOGNITION_URL", "\"${escapeBuildConfigString(cloudRecognitionUrl)}\"")
     }
 
     val keystoreFile = file("$rootDir/release.keystore")
@@ -140,3 +144,23 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+tasks.register("printAppMetadata") {
+    group = "help"
+    description = "Prints authoritative application metadata configured in :app"
+    val appId = android.defaultConfig.applicationId ?: ""
+    val verCode = android.defaultConfig.versionCode ?: 0
+    val verName = android.defaultConfig.versionName ?: ""
+    val compileSdkVal = android.compileSdk ?: 0
+    val targetSdkVal = android.defaultConfig.targetSdk ?: 0
+    val minSdkVal = android.defaultConfig.minSdk ?: 0
+    doLast {
+        println("APPLICATION_ID=$appId")
+        println("VERSION_CODE=$verCode")
+        println("VERSION_NAME=$verName")
+        println("COMPILE_SDK=$compileSdkVal")
+        println("TARGET_SDK=$targetSdkVal")
+        println("MIN_SDK=$minSdkVal")
+    }
+}
+

@@ -68,9 +68,9 @@ The system includes two serverless Edge Functions located in `supabase/functions
 
 ### Option A — Automated GitHub Actions CI (Recommended)
 1. Push this repository to GitHub (`main` or `master` branch).
-2. Open **GitHub Actions** → select workflow **"Build Emofah Android APK"** (`.github/workflows/android-apk.yml`).
+2. Open **GitHub Actions** → select workflow **"Build Emofah Android Debug APK"** (`.github/workflows/android-apk.yml`).
 3. Click **Run workflow**.
-4. The workflow will setup JDK 17, Android SDK 34, and Gradle 8.9, execute all 41 unit test suites, compile `app-debug.apk`, and upload it as a downloadable artifact: **`emofah-agencies-debug-apk`**.
+4. The workflow will setup JDK 17, Android SDK 34, and Gradle 8.9, execute all 45 unit test suites, compile `app-debug.apk`, verify APK integrity and manifest metadata, and upload it as a downloadable artifact: **`emofah-android-debug`**.
 
 ### Option B — Local Android Studio / CLI Build
 1. **Prerequisites:**
@@ -84,7 +84,7 @@ The system includes two serverless Edge Functions located in `supabase/functions
 3. **Compile & Test:**
    ```bash
    cd android
-   gradle testDebugUnitTest assembleDebug
+   ./gradlew testDebugUnitTest assembleDebug
    ```
 4. **Generated Output APK:**
    - `android/app/build/outputs/apk/debug/app-debug.apk`
@@ -109,9 +109,10 @@ The system includes two serverless Edge Functions located in `supabase/functions
 
 ---
 
-## 6. Testing & Quality Assurance (41 Unit Test Suites)
+## 6. Testing & Quality Assurance (45 Unit Test Suites)
 
 All test suites are located in `android/app/src/test/java/com/emofah/agencies/`:
+- **Navigation:** `EmofahNavigationTest`.
 - **Phase 1 (Recognition):** `RecognitionReferenceFoundationTest`, `CapturedImageQualityTest`, `RecognitionRankerTest`, `CloudRecognitionStage14Test`, `ProductRegistrationStage15Test`, `RecognitionLearningStage16Test`, `ImageRecognitionStage101Test`.
 - **Phase 2 (Sales):** `SaleCalculatorTest`, `SaleTransactionStage22Test`, `SaleSpeedAndOverrideStage23Test`, `SaleHistoryCorrectionStage24Test`, `SalesTestingStage102Test`.
 - **Phase 3 (Offline Sync):** `RoomDatabaseContractTest`, `CatalogueCacheStage32Test`, `SyncQueueStage33Test`, `BackgroundSyncStage34Test`, `ConflictHandlingStage35Test`, `OfflineStatusStage36Test`, `ReliabilityRecoveryStage94Test`, `OfflineTestingStage103Test`.

@@ -1051,8 +1051,8 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                   <span>Simple 4-Step Guide (How to Get This on Your Phone Without Coding)</span>
                 </div>
                 <ol className="text-xs text-[#475569] dark:text-[#cbd5e1] space-y-2 list-decimal list-inside leading-relaxed">
-                  <li><strong>Automated Cloud Build:</strong> Put this project into your GitHub account. Click the <em>Actions</em> tab at the top &rarr; click <em>Build Emofah Android APK</em> &rarr; click <em>Run workflow</em>. GitHub will build the phone install file for you in ~2 minutes!</li>
-                  <li><strong>Download Install File:</strong> Once finished, click on <em>emofah-agencies-debug-apk</em> to download the zip file to your computer. Unzip it to get <code className="font-mono">app-debug.apk</code>.</li>
+                  <li><strong>Automated Cloud Build:</strong> Put this project into your GitHub account. Click the <em>Actions</em> tab at the top &rarr; click <em>Build Emofah Android Debug APK</em> &rarr; click <em>Run workflow</em>. GitHub will build the phone install file for you in ~2 minutes!</li>
+                  <li><strong>Download Install File:</strong> Once finished, click on <em>emofah-android-debug</em> to download the zip file to your computer. Unzip it to get <code className="font-mono">app-debug.apk</code>.</li>
                   <li><strong>Send to Phone:</strong> Send <code className="font-mono">app-debug.apk</code> to yourself on WhatsApp, Telegram, Google Drive, or USB cable.</li>
                   <li><strong>Tap to Install:</strong> Open the file on your Android phone and tap <em>Install</em>. If prompted, toggle <em>Allow from this source</em> to ON. The Emofah app icon will appear on your phone screen!</li>
                 </ol>
@@ -1064,7 +1064,7 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                   <span>Option A — GitHub Actions CI (Automated Cloud APK Build)</span>
                 </div>
                 <p className="text-xs leading-relaxed">
-                  Push this repository to GitHub with <code className="font-mono">SUPABASE_URL</code> and <code className="font-mono">SUPABASE_ANON_KEY</code> set as GitHub Repository Variables. The workflow <code className="font-mono">.github/workflows/android-apk.yml</code> installs JDK 17 + Android SDK, runs <code className="font-mono">gradle assembleDebug</code> and unit tests, and outputs a downloadable <code className="font-mono">emofah-agencies-debug-apk</code> artifact.
+                  Push this repository to GitHub with optional <code className="font-mono">SUPABASE_URL</code> and <code className="font-mono">SUPABASE_ANON_KEY</code> Repository Variables. The workflow <code className="font-mono">.github/workflows/android-apk.yml</code> installs JDK 17 + Android SDK, runs <code className="font-mono">./gradlew testDebugUnitTest assembleDebug</code>, verifies the APK manifest and signature, and outputs a downloadable <code className="font-mono">emofah-android-debug</code> artifact.
                 </p>
               </div>
 
@@ -1077,7 +1077,7 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
 {`cp android/local.properties.example android/local.properties
 # Add sdk.dir + SUPABASE_URL + SUPABASE_ANON_KEY
 cd android
-gradle assembleDebug
+./gradlew testDebugUnitTest assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk`}
                 </pre>
               </div>
