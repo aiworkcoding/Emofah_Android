@@ -160,7 +160,7 @@ class AuthSessionRepository(
     }
 
     suspend fun ensureFreshSessionIfOnline(forceRefresh: Boolean = false): AuthActionOutcome? = withContext(Dispatchers.IO) {
-        return refreshMutex.withLock {
+        refreshMutex.withLock {
             val stored = sessionStore.readSession() ?: run {
                 _uiState.value = evaluateCurrentUiState()
                 return@withLock null
