@@ -95,6 +95,7 @@ data class ServerStaffProfile(
     val fullName: String?,
     val staffRole: StaffRole,
     val isActive: Boolean,
+    val bootstrapNeeded: Boolean = false,
 ) {
     companion object {
         fun fromJson(rawJson: String): ServerStaffProfile? {
@@ -102,9 +103,8 @@ data class ServerStaffProfile(
             return runCatching {
                 val obj = JSONObject(rawJson)
                 val roleStr = obj.optString("staff_role", StaffRole.CASHIER.name)
-                val emailVal = obj.optString("email", "").takeIf { it.isNotBlank() && it != "null" }
                 val mappedRole = StaffRole.entries.firstOrNull { it.name == roleStr }
-                    ?: AuthSessionPolicy.mapRoleFromClaims(roleStr, emailVal)
+                    ?: AuthSessionPolicy.mapRoleFromClaims(roleStr)
                 ServerStaffProfile(
                     authenticated = obj.optBoolean("authenticated", false),
                     userId = obj.optString("user_id", "").takeIf { it.isNotBlank() && it != "null" },
@@ -112,10 +112,37 @@ data class ServerStaffProfile(
                     fullName = obj.optString("full_name", "").takeIf { it.isNotBlank() && it != "null" },
                     staffRole = mappedRole,
                     isActive = obj.optBoolean("is_active", true),
+                    bootstrapNeeded = obj.optBoolean("bootstrap_needed", false),
                 )
             }.getOrNull()
         }
     }
+}
+
+data class StaffRoleDirectoryEntry(
+    val userId: String,
+    val email: String,
+    val fullName: String,
+    val staffRole: StaffRole,
+    val isActive: Boolean,
+)
+
+sealed class AuthBootstrapOutcome {
+    data class Activated(val message: String) : AuthBootstrapOutcome()
+    data class Rejected(val message: String) : AuthBootstrapOutcome()
+    data class TransientError(val message: String) : AuthBootstrapOutcome()
+}
+
+sealed class StaffDirectoryOutcome {
+    data class Loaded(val staff: List<StaffRoleDirectoryEntry>) : StaffDirectoryOutcome()
+    data class Rejected(val message: String) : StaffDirectoryOutcome()
+    data class TransientError(val message: String) : StaffDirectoryOutcome()
+}
+
+sealed class RoleUpdateOutcome {
+    data class Updated(val message: String) : RoleUpdateOutcome()
+    data class Rejected(val message: String) : RoleUpdateOutcome()
+    data class TransientError(val message: String) : RoleUpdateOutcome()
 }
 
 /**

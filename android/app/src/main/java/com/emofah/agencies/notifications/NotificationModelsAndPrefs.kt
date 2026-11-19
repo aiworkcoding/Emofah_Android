@@ -11,6 +11,7 @@ data class NotificationPreferencesState(
     val ordersEnabled: Boolean = true,
     val syncAlertsEnabled: Boolean = true,
     val stockAlertsEnabled: Boolean = true,
+    val mpesaInflowAlertsEnabled: Boolean = true,
 )
 
 data class NewOrderAlert(
@@ -127,6 +128,7 @@ class NotificationPrefs(context: Context) {
             ordersEnabled = prefs.getBoolean(KEY_ORDERS_ENABLED, true),
             syncAlertsEnabled = prefs.getBoolean(KEY_SYNC_ENABLED, true),
             stockAlertsEnabled = prefs.getBoolean(KEY_STOCK_ENABLED, true),
+            mpesaInflowAlertsEnabled = prefs.getBoolean(KEY_MPESA_INFLOW_ENABLED, true),
         )
     }
 
@@ -142,6 +144,11 @@ class NotificationPrefs(context: Context) {
 
     fun setStockAlertsEnabled(enabled: Boolean): NotificationPreferencesState {
         prefs.edit().putBoolean(KEY_STOCK_ENABLED, enabled).apply()
+        return readState()
+    }
+
+    fun setMpesaInflowAlertsEnabled(enabled: Boolean): NotificationPreferencesState {
+        prefs.edit().putBoolean(KEY_MPESA_INFLOW_ENABLED, enabled).apply()
         return readState()
     }
 
@@ -190,6 +197,7 @@ class NotificationPrefs(context: Context) {
         private const val KEY_ORDERS_ENABLED = "orders_enabled"
         private const val KEY_SYNC_ENABLED = "sync_alerts_enabled"
         private const val KEY_STOCK_ENABLED = "stock_alerts_enabled"
+        private const val KEY_MPESA_INFLOW_ENABLED = "mpesa_inflow_alerts_enabled"
         private const val KEY_ORDERS_BASELINE_INIT = "orders_baseline_init"
         private const val KEY_SEEN_ORDER_IDS = "seen_order_ids"
         private const val KEY_LAST_SYNC_SIG = "last_sync_signature"

@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel, Type } from "npm:@google/genai@^2.4.0";
+import { GoogleGenAI, Type } from "npm:@google/genai@^2.4.0";
 
 interface CatalogContextItem {
   id: number;
@@ -107,7 +107,7 @@ Deno.serve(async (req: Request) => {
     ].join("\n\n");
 
     const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [
           {
@@ -121,7 +121,6 @@ Deno.serve(async (req: Request) => {
       },
       config: {
         systemInstruction,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -151,7 +150,10 @@ Deno.serve(async (req: Request) => {
       },
     });
 
-    const rawText = (response.text ?? "{}").trim();
+    const rawText = (response.text ?? "{}")
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
     const parsed = JSON.parse(rawText) as {
       extracted_label?: string | null;
       candidates?: Array<{ product_id?: unknown; reason?: string }>;
@@ -176,7 +178,7 @@ Deno.serve(async (req: Request) => {
     const message = err instanceof Error ? err.message : "Cloud recognition failed";
     return new Response(
       JSON.stringify({ error: message, candidates: [] }),
-      { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+      { status: 502, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
     );
   }
 });

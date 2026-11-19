@@ -200,4 +200,72 @@ class ServiceOperationsStage63Test {
         val badJson = JSONObject(json).apply { put("total_revenue", -5.0) }.toString()
         assertNull(SyncQueuePolicy.parseServiceOperationRpcRequest(queueEvt.copy(payloadJson = badJson)))
     }
+
+    @Test
+    fun primaryShopServicesAndDiscountCalculationsAndSerializationWork() {
+        val primaryTypes = ServiceOperationType.entries.filter { it.isPrimaryShopOption }
+        assertEquals(7, primaryTypes.size)
+        assertTrue(primaryTypes.contains(ServiceOperationType.PRINTING))
+        assertTrue(primaryTypes.contains(ServiceOperationType.PHOTOCOPY_BW))
+        assertTrue(primaryTypes.contains(ServiceOperationType.PHOTOCOPY_COLOUR))
+        assertTrue(primaryTypes.contains(ServiceOperationType.EGOV))
+        assertTrue(primaryTypes.contains(ServiceOperationType.P3_FORM))
+        assertTrue(primaryTypes.contains(ServiceOperationType.ABSTRACT))
+        assertTrue(primaryTypes.contains(ServiceOperationType.OTHER))
+
+        val discountedDraft = ServiceOperationDraft(
+            serviceType = ServiceOperationType.PHOTOCOPY_BW,
+            quantityOrDuration = 10,
+            unitPrice = 5.0,
+            discountAmount = 10.0,
+        )
+        assertEquals(50.0, discountedDraft.grossSubtotal, 0.01)
+        assertEquals(40.0, discountedDraft.computedRevenue, 0.01)
+        assertEquals(40.0, discountedDraft.effectiveRevenue, 0.01)
+        assertTrue(ServiceOperationValidator.validate(discountedDraft).isValid)
+
+        val negativeDiscount = discountedDraft.copy(discountAmount = -5.0)
+        assertFalse(ServiceOperationValidator.validate(negativeDiscount).isValid)
+
+        val excessiveDiscount = discountedDraft.copy(discountAmount = 60.0)
+        assertFalse(ServiceOperationValidator.validate(excessiveDiscount).isValid)
+
+        val req = AndroidServiceRpcRequest(
+            clientServiceId = "svc-disc-1",
+            idempotencyKey = "idem-svc-disc-1",
+            serviceType = ServiceOperationType.P3_FORM,
+            serviceLabel = "P3 Form",
+            quantityOrDuration = 1,
+            unitLabel = "forms",
+            unitPrice = 150.0,
+            totalRevenue = 130.0,
+            paymentMethod = "MPESA",
+            customerNote = "Regular customer",
+            consumables = emptyList(),
+            actorId = "cashier-1",
+            deviceId = "dev-1",
+            performedAtIso = "2026-11-19T08:00:00Z",
+            discountAmount = 20.0,
+        )
+
+        val rpcJson = JSONObject(SupabaseServiceOperationClient.buildRpcPayloadJson(req))
+        assertEquals(20.0, rpcJson.getDouble("p_discount_amount"), 0.01)
+        assertEquals(130.0, rpcJson.getDouble("p_total_revenue"), 0.01)
+
+        val serialized = SyncQueuePolicy.serializeServiceOperationRpcRequest(req)
+        val roundTripped = SyncQueuePolicy.parseServiceOperationRpcRequest(
+            SyncQueueEventEntity(
+                eventId = "sync-svc-disc-1",
+                eventType = SyncEventType.SERVICE_OPERATION,
+                entityId = "svc-disc-1",
+                payloadJson = serialized,
+                actorId = "cashier-1",
+                deviceId = "dev-1",
+                createdAtEpochMs = 9999L,
+            )
+        )
+        assertNotNull(roundTripped)
+        assertEquals(20.0, roundTripped!!.discountAmount, 0.01)
+        assertEquals(130.0, roundTripped.totalRevenue, 0.01)
+    }
 }

@@ -1,7 +1,6 @@
 package com.emofah.agencies.recognition
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.Base64
 import com.emofah.agencies.camera.ImageQualityMath
 import com.emofah.agencies.camera.PreparedCaptureResult
@@ -185,7 +184,10 @@ class CloudProductRecognitionClient(
     private fun encodeCompactJpegBase64(imagePath: String): String? {
         val file = File(imagePath)
         if (!file.exists()) return null
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        val bitmap = ImageQualityMath.decodeUprightBitmap(
+            file,
+            CloudCostControlPolicy.CLOUD_IMAGE_MAX_DIMENSION,
+        ) ?: return null
         return try {
             val (w, h) = ImageQualityMath.computeScaledDimensions(
                 bitmap.width,

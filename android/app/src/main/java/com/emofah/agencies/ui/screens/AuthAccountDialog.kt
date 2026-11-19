@@ -1,34 +1,38 @@
 package com.emofah.agencies.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.VerifiedUser
-import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,13 +45,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.emofah.agencies.auth.AuthStatus
 import com.emofah.agencies.auth.AuthUiState
 import com.emofah.agencies.auth.EmofahPermission
+import com.emofah.agencies.auth.RoleUpdateOutcome
+import com.emofah.agencies.auth.StaffDirectoryOutcome
+import com.emofah.agencies.auth.StaffRoleDirectoryEntry
 import com.emofah.agencies.sales.StaffRole
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahCard
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahLoadingButton
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -62,145 +74,128 @@ fun StaffAuthStatusCard(
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = MaterialTheme.emofahColors
     var confirmSignOutWithPending by remember { mutableStateOf(false) }
 
-    val containerColor = when (authState.status) {
-        AuthStatus.AUTHENTICATED -> MaterialTheme.colorScheme.secondaryContainer
-        AuthStatus.OFFLINE_CACHED -> MaterialTheme.colorScheme.tertiaryContainer
-        AuthStatus.SESSION_EXPIRED -> MaterialTheme.colorScheme.errorContainer
-        AuthStatus.UNAUTHENTICATED -> MaterialTheme.colorScheme.surfaceVariant
+    val (tone, iconBg, iconTint) = when (authState.status) {
+        AuthStatus.AUTHENTICATED -> Triple(EmofahBadgeTone.SUCCESS, colors.successContainer, colors.success)
+        AuthStatus.OFFLINE_CACHED -> Triple(EmofahBadgeTone.WARNING, colors.warningContainer, colors.warning)
+        AuthStatus.SESSION_EXPIRED -> Triple(EmofahBadgeTone.DANGER, colors.dangerContainer, colors.danger)
+        AuthStatus.UNAUTHENTICATED -> Triple(EmofahBadgeTone.NEUTRAL, colors.surfaceMuted, colors.textMuted)
     }
 
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
+    val expiryText = remember(authState.session?.expiresAtEpochMs) {
+        authState.session?.expiresAtEpochMs?.let { epoch ->
+            SimpleDateFormat("dd MMM · HH:mm", Locale.getDefault()).format(Date(epoch))
+        }
+    }
+
+    EmofahCard(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(
-                        imageVector = when (authState.status) {
-                            AuthStatus.AUTHENTICATED -> Icons.Outlined.VerifiedUser
-                            AuthStatus.SESSION_EXPIRED -> Icons.Outlined.WarningAmber
-                            AuthStatus.OFFLINE_CACHED -> Icons.Outlined.Lock
-                            AuthStatus.UNAUTHENTICATED -> Icons.Outlined.AccountCircle
-                        },
-                        contentDescription = null,
-                    )
-                    Column {
-                        Text(
-                            text = authState.session?.displayName ?: "Staff Account",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = when (authState.status) {
-                                AuthStatus.AUTHENTICATED ->
-                                    "${authState.session?.email.orEmpty()} · ${authState.activeRole.label}"
-                                AuthStatus.OFFLINE_CACHED ->
-                                    "${authState.session?.email.orEmpty()} · Offline cached (${authState.activeRole.label})"
-                                AuthStatus.SESSION_EXPIRED ->
-                                    "Session expired — sign in to resume syncing"
-                                AuthStatus.UNAUTHENTICATED ->
-                                    "Not signed in (device attribution: ${authState.activeActorId})"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(10.dp),
+                    color = iconBg,
+                    modifier = Modifier.size(36.dp),
                 ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = when (authState.status) {
+                                AuthStatus.AUTHENTICATED -> Icons.Outlined.VerifiedUser
+                                AuthStatus.SESSION_EXPIRED -> Icons.Outlined.WarningAmber
+                                AuthStatus.OFFLINE_CACHED -> Icons.Outlined.Lock
+                                AuthStatus.UNAUTHENTICATED -> Icons.Outlined.AccountCircle
+                            },
+                            contentDescription = null,
+                            tint = iconTint,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                Column {
                     Text(
-                        text = authState.status.label,
-                        style = MaterialTheme.typography.labelSmall,
+                        text = authState.session?.displayName ?: "Staff Account",
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        color = colors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = when (authState.status) {
+                            AuthStatus.AUTHENTICATED ->
+                                "${authState.session?.email.orEmpty()} · ${authState.activeRole.label}"
+                            AuthStatus.OFFLINE_CACHED ->
+                                "${authState.session?.email.orEmpty()} · Offline (${authState.activeRole.label})"
+                            AuthStatus.SESSION_EXPIRED ->
+                                "Sign in again to resume syncing"
+                            AuthStatus.UNAUTHENTICATED ->
+                                "Not signed in (this phone: ${authState.activeActorId})"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
 
-            authState.session?.let { session ->
-                val expiryText = SimpleDateFormat("dd MMM · HH:mm", Locale.getDefault())
-                    .format(Date(session.expiresAtEpochMs))
-                Text(
-                    text = "Token valid until: $expiryText",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Text(
-                text = formatRoleCapabilitiesSummary(authState.activeRole, authState.grantedPermissions),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            EmofahStatusBadge(
+                text = authState.status.label,
+                tone = tone,
+                leadingDot = true,
             )
+        }
 
-            authState.lastError?.let { err ->
-                Text(
-                    text = err,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+        expiryText?.let {
+            Text(
+                text = "Signed in until: $it",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.textMuted,
+            )
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                when (authState.status) {
-                    AuthStatus.UNAUTHENTICATED, AuthStatus.SESSION_EXPIRED -> {
-                        Button(
-                            onClick = onOpenSignIn,
-                            enabled = !authState.isBusy,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(Icons.Outlined.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (authState.status == AuthStatus.SESSION_EXPIRED) "Sign In Again" else "Staff Sign In")
-                        }
-                        if (authState.status == AuthStatus.SESSION_EXPIRED) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (pendingSyncCount > 0) {
-                                        confirmSignOutWithPending = true
-                                    } else {
-                                        onSignOut()
-                                    }
-                                },
-                                enabled = !authState.isBusy,
-                            ) {
-                                Text("Clear")
-                            }
-                        }
-                    }
+        Text(
+            text = formatRoleCapabilitiesSummary(authState.activeRole, authState.grantedPermissions),
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.textMuted,
+        )
 
-                    AuthStatus.AUTHENTICATED, AuthStatus.OFFLINE_CACHED -> {
-                        if (isOnline) {
-                            OutlinedButton(
-                                onClick = onRefreshSession,
-                                enabled = !authState.isBusy,
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Refresh")
-                            }
-                        }
+        authState.lastError?.let { err ->
+            EmofahFeedbackBanner(
+                title = "Account notice",
+                message = err,
+                tone = EmofahBadgeTone.DANGER,
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when (authState.status) {
+                AuthStatus.UNAUTHENTICATED, AuthStatus.SESSION_EXPIRED -> {
+                    EmofahLoadingButton(
+                        text = if (authState.status == AuthStatus.SESSION_EXPIRED) "Sign In Again" else "Staff Sign In",
+                        onClick = onOpenSignIn,
+                        isLoading = authState.isBusy,
+                        loadingText = "Checking...",
+                        icon = Icons.Outlined.Lock,
+                        height = 44.dp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (authState.status == AuthStatus.SESSION_EXPIRED) {
                         OutlinedButton(
                             onClick = {
                                 if (pendingSyncCount > 0) {
@@ -210,12 +205,41 @@ fun StaffAuthStatusCard(
                                 }
                             },
                             enabled = !authState.isBusy,
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Clear")
+                        }
+                    }
+                }
+
+                AuthStatus.AUTHENTICATED, AuthStatus.OFFLINE_CACHED -> {
+                    if (isOnline) {
+                        OutlinedButton(
+                            onClick = onRefreshSession,
+                            enabled = !authState.isBusy,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f),
                         ) {
-                            Icon(Icons.Outlined.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Sign Out")
+                            Text("Refresh")
                         }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (pendingSyncCount > 0) {
+                                confirmSignOutWithPending = true
+                            } else {
+                                onSignOut()
+                            }
+                        },
+                        enabled = !authState.isBusy,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Outlined.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Sign Out")
                     }
                 }
             }
@@ -225,11 +249,13 @@ fun StaffAuthStatusCard(
     if (confirmSignOutWithPending) {
         AlertDialog(
             onDismissRequest = { confirmSignOutWithPending = false },
-            title = { Text("Pending Offline Records") },
+            shape = RoundedCornerShape(22.dp),
+            containerColor = colors.surfaceCard,
+            title = { Text("Items Waiting to Sync") },
             text = {
                 Text(
-                    "There are $pendingSyncCount pending item(s) in the local sync queue. " +
-                        "Local data in Room will remain safe on this device, but queued items cannot upload until a staff member signs back in."
+                    "$pendingSyncCount item(s) are still saved on this phone waiting to upload. " +
+                        "They will stay safe on this phone, and will upload once someone signs back in."
                 )
             },
             confirmButton = {
@@ -238,6 +264,7 @@ fun StaffAuthStatusCard(
                         confirmSignOutWithPending = false
                         onSignOut()
                     },
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 ) {
                     Text("Sign Out Anyway")
@@ -245,7 +272,7 @@ fun StaffAuthStatusCard(
             },
             dismissButton = {
                 TextButton(onClick = { confirmSignOutWithPending = false }) {
-                    Text("Keep Signed In")
+                    Text("Stay Signed In")
                 }
             },
         )
@@ -258,102 +285,384 @@ fun StaffSignInDialog(
     isOnline: Boolean,
     authBlockedSyncCount: Int,
     onDismiss: () -> Unit,
-    onSubmitSignIn: (email: String, password: String) -> Unit,
+    onRequestOtp: (email: String, onSent: (Boolean) -> Unit) -> Unit,
+    onVerifyOtp: (email: String, token: String) -> Unit,
     onRefreshExisting: () -> Unit,
     onSignOut: () -> Unit,
+    onBootstrapInitialAdmin: () -> Unit = {},
+    onLoadStaffDirectory: ((StaffDirectoryOutcome) -> Unit) -> Unit = {},
+    onAssignStaffRole: (email: String, role: StaffRole, isActive: Boolean, onDone: (RoleUpdateOutcome) -> Unit) -> Unit = { _, _, _, _ -> },
 ) {
+    val colors = MaterialTheme.emofahColors
     var emailInput by remember(authState.session?.email) {
         mutableStateOf(authState.session?.email.orEmpty())
     }
-    var passwordInput by remember { mutableStateOf("") }
-    var showPassword by remember { mutableStateOf(false) }
+    var otpTokenInput by remember { mutableStateOf("") }
+    var otpSent by remember { mutableStateOf(false) }
+
+    var showStaffManager by remember { mutableStateOf(false) }
+    var staffList by remember { mutableStateOf<List<StaffRoleDirectoryEntry>>(emptyList()) }
+    var staffManagerMessage by remember { mutableStateOf<String?>(null) }
+    var staffManagerLoading by remember { mutableStateOf(false) }
+    var assignEmailInput by remember { mutableStateOf("") }
+    var assignRoleChoice by remember { mutableStateOf(StaffRole.CASHIER) }
 
     AlertDialog(
         onDismissRequest = {
             if (!authState.isBusy) onDismiss()
         },
+        shape = RoundedCornerShape(24.dp),
+        containerColor = colors.surfaceCard,
         title = {
-            Text(
-                text = when (authState.status) {
-                    AuthStatus.SESSION_EXPIRED -> "Re-Authenticate Staff Session"
-                    AuthStatus.AUTHENTICATED, AuthStatus.OFFLINE_CACHED -> "Staff Account & Session"
-                    AuthStatus.UNAUTHENTICATED -> "Emofah Staff Sign In"
-                }
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (authBlockedSyncCount > 0) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        Text(
-                            text = "$authBlockedSyncCount queued record(s) are paused waiting for a valid staff session. Sign in to resume syncing automatically.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(10.dp),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = colors.infoContainer,
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Outlined.MailOutline,
+                            contentDescription = null,
+                            tint = colors.info,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
+                Column {
+                    Text(
+                        text = when (authState.status) {
+                            AuthStatus.SESSION_EXPIRED -> "Sign In Again"
+                            AuthStatus.AUTHENTICATED, AuthStatus.OFFLINE_CACHED -> "Your Staff Account"
+                            AuthStatus.UNAUTHENTICATED -> "Email Code Sign In"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = "Passwordless 6-digit staff login",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (authBlockedSyncCount > 0) {
+                    EmofahFeedbackBanner(
+                        title = "Sign in to upload saved work",
+                        message = "$authBlockedSyncCount record(s) are waiting for verification to sync.",
+                        tone = EmofahBadgeTone.DANGER,
+                    )
+                }
 
                 if (authState.status == AuthStatus.AUTHENTICATED || authState.status == AuthStatus.OFFLINE_CACHED) {
-                    Text(
-                        text = "Signed in as ${authState.session?.email.orEmpty()} (${authState.activeRole.label}).",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        text = "Status: ${authState.status.label}. ${formatRoleCapabilitiesSummary(authState.activeRole, authState.grantedPermissions)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    EmofahCard(
+                        containerColor = colors.surfaceElevated,
+                        contentPadding = PaddingValues(12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = authState.session?.email.orEmpty(),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    text = "${authState.activeRole.label} · ${authState.status.label}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.textMuted,
+                                )
+                            }
+                            EmofahStatusBadge(
+                                text = authState.activeRole.label,
+                                tone = EmofahBadgeTone.INFO,
+                            )
+                        }
+                        Text(
+                            text = formatRoleCapabilitiesSummary(authState.activeRole, authState.grantedPermissions),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted,
+                        )
+                    }
+
+                    if (authState.bootstrapNeeded && authState.activeRole != StaffRole.OWNER_MANAGER) {
+                        EmofahCard(
+                            containerColor = colors.infoContainer,
+                            borderColor = colors.info.copy(alpha = 0.25f),
+                            contentPadding = PaddingValues(12.dp),
+                        ) {
+                            Text(
+                                text = "First-Time Shop Owner Setup",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary,
+                            )
+                            Text(
+                                text = "No Owner account is set up yet. If you are the shop owner, tap below to activate Owner access on this account.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textMuted,
+                            )
+                            EmofahLoadingButton(
+                                text = "Claim Owner Access",
+                                onClick = onBootstrapInitialAdmin,
+                                enabled = isOnline && !authState.isBusy,
+                                isLoading = authState.isBusy,
+                                height = 44.dp,
+                            )
+                        }
+                    }
+
+                    if (authState.activeRole == StaffRole.OWNER_MANAGER) {
+                        HorizontalDivider(color = colors.borderSubtle)
+                        OutlinedButton(
+                            onClick = {
+                                showStaffManager = !showStaffManager
+                                if (showStaffManager && isOnline) {
+                                    staffManagerLoading = true
+                                    staffManagerMessage = null
+                                    onLoadStaffDirectory { outcome ->
+                                        staffManagerLoading = false
+                                        when (outcome) {
+                                            is StaffDirectoryOutcome.Loaded -> staffList = outcome.staff
+                                            is StaffDirectoryOutcome.Rejected -> staffManagerMessage = outcome.message
+                                            is StaffDirectoryOutcome.TransientError -> staffManagerMessage = outcome.message
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !authState.isBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (showStaffManager) "Hide Staff Access Manager" else "Manage Staff Roles")
+                        }
+
+                        if (showStaffManager) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Give a staff member Cashier, Supervisor, or Owner access after they sign in once with their email code.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.textMuted,
+                                )
+                                OutlinedTextField(
+                                    value = assignEmailInput,
+                                    onValueChange = { assignEmailInput = it },
+                                    label = { Text("Staff Email") },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    StaffRole.entries.forEach { roleOption ->
+                                        val selected = assignRoleChoice == roleOption
+                                        if (selected) {
+                                            Button(
+                                                onClick = { assignRoleChoice = roleOption },
+                                                shape = RoundedCornerShape(10.dp),
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                Text(
+                                                    text = when (roleOption) {
+                                                        StaffRole.CASHIER -> "Cashier"
+                                                        StaffRole.SUPERVISOR -> "Superv."
+                                                        StaffRole.OWNER_MANAGER -> "Owner"
+                                                    },
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
+                                        } else {
+                                            OutlinedButton(
+                                                onClick = { assignRoleChoice = roleOption },
+                                                shape = RoundedCornerShape(10.dp),
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                Text(
+                                                    text = when (roleOption) {
+                                                        StaffRole.CASHIER -> "Cashier"
+                                                        StaffRole.SUPERVISOR -> "Superv."
+                                                        StaffRole.OWNER_MANAGER -> "Owner"
+                                                    },
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                EmofahLoadingButton(
+                                    text = "Save Staff Role",
+                                    loadingText = "Updating...",
+                                    isLoading = staffManagerLoading,
+                                    enabled = isOnline && !staffManagerLoading && assignEmailInput.contains("@"),
+                                    height = 44.dp,
+                                    onClick = {
+                                        staffManagerLoading = true
+                                        staffManagerMessage = null
+                                        onAssignStaffRole(assignEmailInput, assignRoleChoice, true) { res ->
+                                            when (res) {
+                                                is RoleUpdateOutcome.Updated -> {
+                                                    staffManagerMessage = res.message
+                                                    assignEmailInput = ""
+                                                    onLoadStaffDirectory { dir ->
+                                                        staffManagerLoading = false
+                                                        if (dir is StaffDirectoryOutcome.Loaded) {
+                                                            staffList = dir.staff
+                                                        }
+                                                    }
+                                                }
+                                                is RoleUpdateOutcome.Rejected -> {
+                                                    staffManagerLoading = false
+                                                    staffManagerMessage = res.message
+                                                }
+                                                is RoleUpdateOutcome.TransientError -> {
+                                                    staffManagerLoading = false
+                                                    staffManagerMessage = res.message
+                                                }
+                                            }
+                                        }
+                                    },
+                                )
+
+                                staffManagerMessage?.let { msg ->
+                                    Text(
+                                        text = msg,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+
+                                staffList.forEach { member ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = colors.surfaceElevated,
+                                        border = BorderStroke(1.dp, colors.borderSubtle),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = member.email,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                                Text(
+                                                    text = "${member.staffRole.label}${if (!member.isActive) " · Disabled" else ""}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = colors.textMuted,
+                                                )
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    assignEmailInput = member.email
+                                                    assignRoleChoice = member.staffRole
+                                                },
+                                            ) {
+                                                Text("Select")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     Text(
                         text = if (isOnline) {
-                            "Sign in with your Supabase Emofah staff email and password."
+                            if (!otpSent) {
+                                "Enter your email address. We will send you a 6-digit login code — no password needed."
+                            } else {
+                                "We sent a 6-digit login code to $emailInput. Check your email and enter the code below."
+                            }
                         } else {
-                            "You appear offline. Sign in requires an active connection; offline capture continues safely."
+                            "No internet right now. You need internet to sign in, but you can still record sales offline."
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textMuted,
                     )
 
                     OutlinedTextField(
                         value = emailInput,
                         onValueChange = { emailInput = it },
-                        label = { Text("Staff Email") },
+                        label = { Text("Your Email Address") },
                         singleLine = true,
-                        enabled = !authState.isBusy,
+                        enabled = !authState.isBusy && !otpSent,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = colors.borderSubtle,
+                        ),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                         modifier = Modifier.fillMaxWidth(),
                     )
 
-                    OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = { passwordInput = it },
-                        label = { Text("Password") },
-                        singleLine = true,
-                        enabled = !authState.isBusy,
-                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        trailingIcon = {
-                            IconButton(onClick = { showPassword = !showPassword }) {
-                                Icon(
-                                    imageVector = if (showPassword) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                                    contentDescription = if (showPassword) "Hide password" else "Show password",
-                                )
+                    if (otpSent) {
+                        OutlinedTextField(
+                            value = otpTokenInput,
+                            onValueChange = { otpTokenInput = it.filter { ch -> ch.isDigit() || ch == ' ' }.trim() },
+                            label = { Text("6-Digit Email Code") },
+                            placeholder = { Text("e.g. 123456") },
+                            singleLine = true,
+                            enabled = !authState.isBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    otpSent = false
+                                    otpTokenInput = ""
+                                },
+                                enabled = !authState.isBusy,
+                            ) {
+                                Text("Change Email")
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                            TextButton(
+                                onClick = {
+                                    onRequestOtp(emailInput) { sent ->
+                                        otpSent = sent
+                                    }
+                                },
+                                enabled = !authState.isBusy && isOnline,
+                            ) {
+                                Text("Resend Code")
+                            }
+                        }
+                    }
                 }
 
                 authState.lastError?.let { err ->
-                    Text(
-                        text = err,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                    EmofahFeedbackBanner(
+                        title = "Sign in error",
+                        message = err,
+                        tone = EmofahBadgeTone.DANGER,
                     )
                 }
             }
@@ -365,6 +674,7 @@ fun StaffSignInDialog(
                         OutlinedButton(
                             onClick = onRefreshExisting,
                             enabled = !authState.isBusy,
+                            shape = RoundedCornerShape(12.dp),
                         ) {
                             Text("Refresh")
                         }
@@ -372,17 +682,39 @@ fun StaffSignInDialog(
                     Button(
                         onClick = onSignOut,
                         enabled = !authState.isBusy,
+                        shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     ) {
                         Text("Sign Out")
                     }
                 }
             } else {
-                Button(
-                    onClick = { onSubmitSignIn(emailInput, passwordInput) },
-                    enabled = !authState.isBusy && emailInput.isNotBlank() && passwordInput.isNotEmpty(),
-                ) {
-                    Text(if (authState.isBusy) "Signing In..." else "Sign In")
+                if (!otpSent) {
+                    EmofahLoadingButton(
+                        text = "Send Email Code",
+                        loadingText = "Sending...",
+                        isLoading = authState.isBusy,
+                        enabled = !authState.isBusy && emailInput.isNotBlank() && emailInput.contains("@"),
+                        height = 44.dp,
+                        onClick = {
+                            if (emailInput.isNotBlank()) {
+                                onRequestOtp(emailInput) { sent ->
+                                    otpSent = sent
+                                }
+                            }
+                        },
+                        modifier = Modifier.width(176.dp),
+                    )
+                } else {
+                    EmofahLoadingButton(
+                        text = "Sign In",
+                        loadingText = "Checking...",
+                        isLoading = authState.isBusy,
+                        enabled = !authState.isBusy && otpTokenInput.length >= 4,
+                        height = 44.dp,
+                        onClick = { onVerifyOtp(emailInput, otpTokenInput) },
+                        modifier = Modifier.width(150.dp),
+                    )
                 }
             }
         },

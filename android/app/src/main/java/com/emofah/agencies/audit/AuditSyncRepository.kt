@@ -3,8 +3,10 @@ package com.emofah.agencies.audit
 import com.emofah.agencies.data.local.EmofahDatabase
 import com.emofah.agencies.sales.ConnectivityChecker
 import com.emofah.agencies.sales.DeviceIdentityProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 data class AuditFlushSummary(
     val attemptedCount: Int,
@@ -32,9 +34,10 @@ class AuditSyncRepository(
     suspend fun flushPendingAudits(
         maxBatches: Int = 5,
         batchSize: Int = 50,
-    ): AuditFlushSummary = flushMutex.withLock {
-        if (!connectivityChecker.isOnline()) {
-            return@withLock AuditFlushSummary(
+    ): AuditFlushSummary = withContext(Dispatchers.IO) {
+        flushMutex.withLock {
+            if (!connectivityChecker.isOnline()) {
+                return@withLock AuditFlushSummary(
                 attemptedCount = 0,
                 confirmedCount = 0,
                 duplicateCount = 0,
@@ -116,12 +119,13 @@ class AuditSyncRepository(
             duplicateCount = totalDuplicates,
             message = message,
         )
+        }
     }
 
-    suspend fun fetchRemoteAudits(limit: Int = 100): RemoteAuditFetchOutcome {
+    suspend fun fetchRemoteAudits(limit: Int = 100): RemoteAuditFetchOutcome = withContext(Dispatchers.IO) {
         if (!connectivityChecker.isOnline()) {
-            return RemoteAuditFetchOutcome.Error("Offline — showing local device audit trail.")
+            return@withContext RemoteAuditFetchOutcome.Error("Offline — showing local device audit trail.")
         }
-        return auditGateway.fetchRemoteAudits(limit)
+        auditGateway.fetchRemoteAudits(limit)
     }
 }

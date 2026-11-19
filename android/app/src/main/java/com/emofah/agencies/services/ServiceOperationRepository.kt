@@ -89,6 +89,7 @@ class ServiceOperationRepository(
             actorId = actorId,
             deviceId = deviceId,
             performedAtIso = nowIso,
+            discountAmount = draft.discountAmount.coerceAtLeast(0.0),
         )
 
         if (isSupabaseConfigured && connectivityChecker.isOnline()) {
@@ -273,6 +274,7 @@ class ServiceOperationRepository(
                 put("quantity_or_duration", draft.quantityOrDuration)
                 put("unit_label", draft.serviceType.unitLabel)
                 put("unit_price", draft.unitPrice)
+                put("discount_amount", draft.discountAmount.coerceAtLeast(0.0))
                 put("payment_method", draft.paymentMethod.name)
                 draft.customerNote.trim().takeIf { it.isNotBlank() }?.let {
                     put("customer_note", it)

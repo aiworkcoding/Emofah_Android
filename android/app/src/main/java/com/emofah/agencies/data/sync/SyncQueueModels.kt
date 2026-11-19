@@ -713,6 +713,7 @@ object SyncQueuePolicy {
             put("actor_id", req.actorId)
             put("device_id", req.deviceId)
             put("performed_at", req.performedAtIso)
+            put("discount_amount", req.discountAmount)
         }.toString()
     }
 
@@ -769,6 +770,9 @@ object SyncQueuePolicy {
                 actorId = json.optString("actor_id", event.actorId).ifBlank { event.actorId },
                 deviceId = json.optString("device_id", event.deviceId).ifBlank { event.deviceId },
                 performedAtIso = json.optString("performed_at", "").ifBlank { "1970-01-01T00:00:00Z" },
+                discountAmount = json.optDouble("discount_amount", 0.0).let {
+                    if (it.isNaN() || it < 0.0) 0.0 else it
+                },
             )
         }.getOrNull()
     }

@@ -7,44 +7,98 @@ enum class ServiceOperationType(
     val code: String,
     val label: String,
     val unitLabel: String,
+    val defaultUnitPrice: Double,
     val suggestedConsumables: List<String>,
+    val isPrimaryShopOption: Boolean = true,
 ) {
     PRINTING(
         code = "PRINTING",
         label = "Printing",
         unitLabel = "pages",
+        defaultUnitPrice = 10.0,
         suggestedConsumables = listOf("A4 Paper", "Printer Ink / Toner"),
     ),
+    PHOTOCOPY_BW(
+        code = "PHOTOCOPY_BW",
+        label = "Photocopy B&W",
+        unitLabel = "pages",
+        defaultUnitPrice = 5.0,
+        suggestedConsumables = listOf("A4 Paper", "Copier Toner"),
+    ),
+    PHOTOCOPY_COLOUR(
+        code = "PHOTOCOPY_COLOUR",
+        label = "Photocopy Colour",
+        unitLabel = "pages",
+        defaultUnitPrice = 20.0,
+        suggestedConsumables = listOf("A4 Paper", "Color Toner"),
+    ),
+    EGOV(
+        code = "EGOV",
+        label = "E-Government",
+        unitLabel = "tasks",
+        defaultUnitPrice = 200.0,
+        suggestedConsumables = listOf("A4 Paper"),
+    ),
+    P3_FORM(
+        code = "P3_FORM",
+        label = "P3 Form",
+        unitLabel = "forms",
+        defaultUnitPrice = 150.0,
+        suggestedConsumables = listOf("A4 Paper"),
+    ),
+    ABSTRACT(
+        code = "ABSTRACT",
+        label = "Abstract",
+        unitLabel = "copies",
+        defaultUnitPrice = 30.0,
+        suggestedConsumables = listOf("A4 Paper"),
+    ),
+    OTHER(
+        code = "OTHER",
+        label = "Other",
+        unitLabel = "units",
+        defaultUnitPrice = 50.0,
+        suggestedConsumables = emptyList(),
+    ),
+    // Legacy aliases preserved for historical DB records, receipt rendering, and unit tests
     PHOTOCOPYING(
         code = "PHOTOCOPYING",
         label = "Photocopying",
-        unitLabel = "copies",
+        unitLabel = "pages",
+        defaultUnitPrice = 5.0,
         suggestedConsumables = listOf("A4 Paper", "Copier Toner"),
+        isPrimaryShopOption = false,
     ),
     SCANNING(
         code = "SCANNING",
         label = "Scanning",
         unitLabel = "pages",
+        defaultUnitPrice = 20.0,
         suggestedConsumables = emptyList(),
+        isPrimaryShopOption = false,
     ),
     INTERNET_BROWSING(
         code = "INTERNET_BROWSING",
         label = "Internet Browsing",
         unitLabel = "minutes",
+        defaultUnitPrice = 2.0,
         suggestedConsumables = emptyList(),
+        isPrimaryShopOption = false,
     ),
     EGOV_ASSISTANCE(
         code = "EGOV_ASSISTANCE",
         label = "E-Gov Assistance",
         unitLabel = "tasks",
+        defaultUnitPrice = 150.0,
         suggestedConsumables = listOf("A4 Paper"),
+        isPrimaryShopOption = false,
     ),
     ;
 
     companion object {
         fun fromCode(raw: String?): ServiceOperationType {
             val clean = raw?.trim()?.uppercase().orEmpty()
-            return entries.firstOrNull { it.code == clean } ?: PRINTING
+            return entries.firstOrNull { it.code == clean || it.label.uppercase() == clean } ?: PRINTING
         }
     }
 }
@@ -64,14 +118,18 @@ data class ServiceOperationDraft(
     val idempotencyKey: String = "svc-${UUID.randomUUID()}",
     val serviceType: ServiceOperationType = ServiceOperationType.PRINTING,
     val quantityOrDuration: Int = 1,
-    val unitPrice: Double = 0.0,
+    val unitPrice: Double = ServiceOperationType.PRINTING.defaultUnitPrice,
+    val discountAmount: Double = 0.0,
     val customTotalRevenue: Double? = null,
     val paymentMethod: PaymentMethod = PaymentMethod.CASH,
     val customerNote: String = "",
     val consumables: List<ServiceConsumableDraft> = emptyList(),
 ) {
+    val grossSubtotal: Double
+        get() = quantityOrDuration.coerceAtLeast(1) * unitPrice.coerceAtLeast(0.0)
+
     val computedRevenue: Double
-        get() = (quantityOrDuration.coerceAtLeast(1) * unitPrice.coerceAtLeast(0.0))
+        get() = (grossSubtotal - discountAmount.coerceAtLeast(0.0)).coerceAtLeast(0.0)
 
     val effectiveRevenue: Double
         get() = customTotalRevenue?.coerceAtLeast(0.0) ?: computedRevenue
@@ -86,13 +144,19 @@ object ServiceOperationValidator {
     fun validate(draft: ServiceOperationDraft): ServiceValidationResult {
         val errors = mutableListOf<String>()
         if (draft.quantityOrDuration <= 0) {
-            errors += "Quantity or duration must be at least 1 ${draft.serviceType.unitLabel}."
+            errors += "Enter quantity of at least 1."
         }
         if (draft.unitPrice < 0.0 || draft.unitPrice.isNaN()) {
             errors += "Unit price cannot be negative."
         }
+        if (draft.discountAmount < 0.0 || draft.discountAmount.isNaN()) {
+            errors += "Discount cannot be less than 0."
+        }
+        if (draft.customTotalRevenue == null && draft.discountAmount > draft.grossSubtotal) {
+            errors += "Discount cannot be more than the service total."
+        }
         if (draft.effectiveRevenue <= 0.0 || draft.effectiveRevenue.isNaN()) {
-            errors += "Enter a price / service revenue greater than Ksh 0."
+            errors += "Total amount must be more than Ksh 0."
         }
         draft.consumables.forEachIndexed { idx, cons ->
             if (cons.consumableName.trim().length < 2) {
@@ -102,7 +166,7 @@ object ServiceOperationValidator {
                 errors += "${cons.consumableName.ifBlank { "Consumable #${idx + 1}" }}: Usage quantity cannot be negative."
             }
             if (cons.stockDeductQty > 0 && (cons.linkedProductId == null || cons.linkedProductId <= 0L)) {
-                errors += "${cons.consumableName.ifBlank { "Consumable #${idx + 1}" }}: Select a catalogue product before deducting stock."
+                errors += "${cons.consumableName.ifBlank { "Consumable #${idx + 1}" }}: Pick a shop item before deducting stock."
             }
             if (cons.stockDeductQty < 0) {
                 errors += "${cons.consumableName}: Stock deduction quantity cannot be negative."
@@ -138,6 +202,7 @@ data class AndroidServiceRpcRequest(
     val actorId: String,
     val deviceId: String,
     val performedAtIso: String,
+    val discountAmount: Double = 0.0,
 )
 
 data class UpdatedConsumableStockAck(

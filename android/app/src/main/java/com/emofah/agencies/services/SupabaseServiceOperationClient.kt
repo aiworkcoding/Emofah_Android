@@ -101,6 +101,7 @@ class SupabaseServiceOperationClient(
                 put("p_actor_id", req.actorId)
                 put("p_device_id", req.deviceId)
                 put("p_performed_at", req.performedAtIso)
+                put("p_discount_amount", req.discountAmount)
             }.toString()
         }
 

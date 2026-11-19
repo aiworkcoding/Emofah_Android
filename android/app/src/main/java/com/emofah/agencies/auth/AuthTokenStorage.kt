@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -18,7 +19,8 @@ interface SecureKeyValueStore {
 
 /**
  * Encrypts sensitive Supabase Auth tokens (access_token / refresh_token) using AndroidKeyStore AES-GCM
- * before persisting in private SharedPreferences.
+ * before persisting in private SharedPreferences, with a thread-safe in-memory cache so UI and
+ * network callers never repeatedly block on AndroidKeyStore binder IPC.
  */
 class AndroidKeyStoreTokenStorage(
     context: Context,
@@ -27,13 +29,25 @@ class AndroidKeyStoreTokenStorage(
 ) : SecureKeyValueStore {
 
     private val prefs = context.applicationContext.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+    private val memoryCache = ConcurrentHashMap<String, String>()
+
+    @Volatile
+    private var cachedSecretKey: SecretKey? = null
+    private val keyLock = Any()
 
     override fun getString(key: String): String? {
-        val stored = prefs.getString(key, null) ?: return null
-        if (!stored.startsWith(PREFIX_ENC)) {
+        val cached = memoryCache[key]
+        if (cached != null) {
+            return if (cached === NULL_SENTINEL) null else cached
+        }
+        val stored = prefs.getString(key, null)
+        if (stored == null || !stored.startsWith(PREFIX_ENC)) {
+            memoryCache[key] = NULL_SENTINEL
             return null
         }
-        return decrypt(stored.removePrefix(PREFIX_ENC))
+        val decrypted = decrypt(stored.removePrefix(PREFIX_ENC))
+        memoryCache[key] = decrypted ?: NULL_SENTINEL
+        return decrypted
     }
 
     override fun putString(key: String, value: String?) {
@@ -42,32 +56,41 @@ class AndroidKeyStoreTokenStorage(
             return
         }
         val encrypted = encrypt(value) ?: return
+        memoryCache[key] = value
         prefs.edit().putString(key, PREFIX_ENC + encrypted).apply()
     }
 
     override fun remove(key: String) {
+        memoryCache[key] = NULL_SENTINEL
         prefs.edit().remove(key).apply()
     }
 
     private fun getOrCreateKey(): SecretKey? {
-        return runCatching {
-            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-            val existing = keyStore.getEntry(keyAlias, null) as? KeyStore.SecretKeyEntry
-            if (existing != null) {
-                return@runCatching existing.secretKey
-            }
-            val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-            val spec = KeyGenParameterSpec.Builder(
-                keyAlias,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-            keyGen.init(spec)
-            keyGen.generateKey()
-        }.getOrNull()
+        cachedSecretKey?.let { return it }
+        synchronized(keyLock) {
+            cachedSecretKey?.let { return it }
+            return runCatching {
+                val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+                val existing = keyStore.getEntry(keyAlias, null) as? KeyStore.SecretKeyEntry
+                val resolved = if (existing != null) {
+                    existing.secretKey
+                } else {
+                    val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+                    val spec = KeyGenParameterSpec.Builder(
+                        keyAlias,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .build()
+                    keyGen.init(spec)
+                    keyGen.generateKey()
+                }
+                cachedSecretKey = resolved
+                resolved
+            }.getOrNull()
+        }
     }
 
     private fun encrypt(plainText: String): String? {
@@ -106,6 +129,7 @@ class AndroidKeyStoreTokenStorage(
         private const val PREFS_NAME = "emofah_auth_secure_store"
         private const val KEY_ALIAS = "emofah_auth_session_key_v1"
         private const val PREFIX_ENC = "enc_v1:"
+        private val NULL_SENTINEL = String(charArrayOf('\u0000'))
     }
 }
 

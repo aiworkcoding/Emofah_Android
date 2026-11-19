@@ -1,7 +1,6 @@
 package com.emofah.agencies.recognition
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.emofah.agencies.camera.ImageQualityMath
 import com.emofah.agencies.data.SupabaseConfig
 import kotlinx.coroutines.Dispatchers
@@ -144,7 +143,7 @@ class SupabaseRecognitionCorrectionClient(
     }
 
     private fun encodeCompactJpeg(file: File): ByteArray? {
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        val bitmap = ImageQualityMath.decodeUprightBitmap(file, 1024) ?: return null
         return try {
             val (w, h) = ImageQualityMath.computeScaledDimensions(bitmap.width, bitmap.height, 640)
             val scaled = if (w != bitmap.width || h != bitmap.height) {

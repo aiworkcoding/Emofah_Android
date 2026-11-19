@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel, Type } from "npm:@google/genai@^2.4.0";
+import { GoogleGenAI, Type } from "npm:@google/genai@^2.4.0";
 
 interface CatalogContextItem {
   id: number;
@@ -108,11 +108,10 @@ Deno.serve(async (req: Request) => {
     parts.push({ text: promptParts });
 
     const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
+      model: "gemini-2.5-flash",
       contents: { parts },
       config: {
         systemInstruction,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -179,7 +178,10 @@ Deno.serve(async (req: Request) => {
       },
     });
 
-    const rawText = (response.text ?? "{}").trim();
+    const rawText = (response.text ?? "{}")
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
     const parsed = JSON.parse(rawText) as {
       supplier_name?: string;
       invoice_ref?: string;
@@ -242,7 +244,7 @@ Deno.serve(async (req: Request) => {
     const message = err instanceof Error ? err.message : "Receipt extraction failed";
     return new Response(
       JSON.stringify({ error: message, items: [] }),
-      { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+      { status: 502, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
     );
   }
 });

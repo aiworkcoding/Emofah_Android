@@ -90,6 +90,7 @@ data class AuthUiState(
     val lastError: String? = null,
     val isBusy: Boolean = false,
     val needsReauthPrompt: Boolean = false,
+    val bootstrapNeeded: Boolean = false,
 ) {
     val hasActiveBearerToken: Boolean
         get() = session != null && status != AuthStatus.SESSION_EXPIRED && status != AuthStatus.UNAUTHENTICATED
@@ -120,16 +121,11 @@ sealed class AuthActionOutcome {
 object AuthSessionPolicy {
     const val REFRESH_WINDOW_MS = 5 * 60 * 1000L
 
-    fun mapRoleFromClaims(rawRole: String?, email: String? = null): StaffRole {
+    fun mapRoleFromClaims(rawRole: String?, @Suppress("UNUSED_PARAMETER") email: String? = null): StaffRole {
         val normalized = rawRole?.trim()?.lowercase().orEmpty()
-        val emailNormalized = email?.trim()?.lowercase().orEmpty()
-        return when {
-            normalized in listOf("owner", "manager", "owner_manager", "admin", "super_admin") ||
-                emailNormalized.contains("admin") ||
-                emailNormalized.contains("owner") ||
-                emailNormalized.contains("manager") -> StaffRole.OWNER_MANAGER
-            normalized in listOf("supervisor", "shift_lead", "lead") ||
-                emailNormalized.contains("supervisor") -> StaffRole.SUPERVISOR
+        return when (normalized) {
+            "owner", "manager", "owner_manager", "admin", "super_admin" -> StaffRole.OWNER_MANAGER
+            "supervisor", "shift_lead", "lead" -> StaffRole.SUPERVISOR
             else -> StaffRole.CASHIER
         }
     }

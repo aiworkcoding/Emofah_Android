@@ -3,6 +3,6 @@
 
 # Shared Emofah Supabase Backend (Publishable anon key only - NEVER put service_role here)
 SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx5aXNhbWJka3R0ZHhrZGJkc3BmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjYzNDI2NiwiZXhwIjoyMDkyMjEwMjY2fQ.rsYDERI-W13XcUWMTVts1aDA2jRHZMM3TbQKpuh6jJc
+SUPABASE_ANON_KEY=your-publishable-anon-key
 # Optional: override cloud recognition endpoint (defaults to SUPABASE_URL/functions/v1/recognize-product)
 # CLOUD_RECOGNITION_URL=https://your-project-ref.supabase.co/functions/v1/recognize-product

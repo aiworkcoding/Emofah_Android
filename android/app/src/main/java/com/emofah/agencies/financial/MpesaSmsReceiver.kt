@@ -6,6 +6,7 @@ import android.content.Intent
 import android.provider.Telephony
 import com.emofah.agencies.data.local.EmofahDatabase
 import com.emofah.agencies.data.sync.SyncScheduler
+import com.emofah.agencies.notifications.EmofahNotificationManager
 import com.emofah.agencies.sales.DeviceIdentityProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +53,7 @@ class MpesaSmsReceiver : BroadcastReceiver() {
                 )
                 val identity = DeviceIdentityProvider(appContext)
                 for ((sender, bodyBuilder) in groupedBySender) {
-                    repo.processIncomingSms(
+                    val outcome = repo.processIncomingSms(
                         sender = sender,
                         body = bodyBuilder.toString(),
                         actorId = identity.getActorId(),
@@ -60,6 +61,14 @@ class MpesaSmsReceiver : BroadcastReceiver() {
                         requireConsentCheck = true,
                         allowManualPasteOverride = false,
                     )
+                    if (outcome is MpesaCaptureOutcome.Captured &&
+                        outcome.event.direction.equals("INFLOW", ignoreCase = true)
+                    ) {
+                        EmofahNotificationManager.notifyMpesaInflowReceived(
+                            context = appContext,
+                            event = outcome.event,
+                        )
+                    }
                 }
             } finally {
                 pendingResult.finish()

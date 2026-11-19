@@ -1,7 +1,6 @@
 package com.emofah.agencies.purchases
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.Base64
 import com.emofah.agencies.camera.ImageQualityMath
 import com.emofah.agencies.camera.PreparedCaptureResult
@@ -93,7 +92,7 @@ class SupabaseReceiptExtractionClient(
     }
 
     private suspend fun runLocalOcr(imagePath: String): String {
-        val bitmap = BitmapFactory.decodeFile(imagePath) ?: return ""
+        val bitmap = ImageQualityMath.decodeUprightBitmap(File(imagePath), 1600) ?: return ""
         return try {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
             suspendCancellableCoroutine { cont ->
@@ -172,7 +171,7 @@ class SupabaseReceiptExtractionClient(
     private fun encodeReceiptJpegBase64(imagePath: String): String? {
         val file = File(imagePath)
         if (!file.exists()) return null
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        val bitmap = ImageQualityMath.decodeUprightBitmap(file, 1280) ?: return null
         return try {
             val (w, h) = ImageQualityMath.computeScaledDimensions(
                 bitmap.width,

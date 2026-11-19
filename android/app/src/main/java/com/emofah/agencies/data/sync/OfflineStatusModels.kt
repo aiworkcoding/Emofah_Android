@@ -38,7 +38,7 @@ data class OfflineStatusSummary(
                 !isOnline && pending.isNotEmpty() ->
                     "Offline · ${pending.size} item(s) queued safely on device"
                 !isOnline ->
-                    "Offline · New sales save locally to Room"
+                    "Offline · New sales save on this phone"
                 pending.isNotEmpty() ->
                     "Online · ${pending.size} item(s) ready to sync"
                 else ->

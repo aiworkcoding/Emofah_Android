@@ -130,6 +130,44 @@ object ImageQualityMath {
             isTooBlurry = sharpness < BLUR_SHARPNESS_THRESHOLD,
         )
     }
+
+    fun decodeUprightBitmap(file: File, maxTargetDim: Int): Bitmap? {
+        if (!file.exists() || file.length() == 0L) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        var inSampleSize = 1
+        while (
+            bounds.outWidth / inSampleSize > maxTargetDim * 2 ||
+            bounds.outHeight / inSampleSize > maxTargetDim * 2
+        ) {
+            inSampleSize *= 2
+        }
+
+        val opts = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+        val decoded = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return null
+
+        val exif = runCatching { ExifInterface(file.absolutePath) }.getOrNull()
+        val orientation = exif?.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL,
+        ) ?: ExifInterface.ORIENTATION_NORMAL
+
+        val degrees = exifOrientationToDegrees(orientation)
+        val flip = isHorizontalFlip(orientation)
+        if (degrees == 0 && !flip) return decoded
+
+        val matrix = Matrix().apply {
+            if (flip) postScale(-1f, 1f)
+            if (degrees != 0) postRotate(degrees.toFloat())
+        }
+        val transformed = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+        if (transformed != decoded) {
+            decoded.recycle()
+        }
+        return transformed
+    }
 }
 
 class CapturedImageProcessor(context: Context) {
@@ -148,19 +186,10 @@ class CapturedImageProcessor(context: Context) {
         processedCache[captureId]?.let { return@withContext it }
         if (!rawFile.exists() || rawFile.length() == 0L) return@withContext null
 
-        val exif = runCatching { ExifInterface(rawFile.absolutePath) }.getOrNull()
-        val orientation = exif?.getAttributeInt(
-            ExifInterface.TAG_ORIENTATION,
-            ExifInterface.ORIENTATION_NORMAL,
-        ) ?: ExifInterface.ORIENTATION_NORMAL
-
-        val decoded = decodeSampledBitmap(rawFile, ImageQualityMath.ORIGINAL_MAX_DIMENSION)
-            ?: return@withContext null
-
-        val upright = applyExifTransform(decoded, orientation)
-        if (upright != decoded) {
-            decoded.recycle()
-        }
+        val upright = ImageQualityMath.decodeUprightBitmap(
+            file = rawFile,
+            maxTargetDim = ImageQualityMath.ORIGINAL_MAX_DIMENSION,
+        ) ?: return@withContext null
 
         val (origW, origH) = ImageQualityMath.computeScaledDimensions(
             upright.width,

@@ -10,7 +10,14 @@ import com.emofah.agencies.notifications.EmofahNotificationManager
 import com.emofah.agencies.sales.AndroidConnectivityChecker
 import com.emofah.agencies.sales.DeviceIdentityProvider
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+
 class EmofahApplication : Application() {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     val database: EmofahDatabase by lazy { EmofahDatabase.getInstance(this) }
     val authSessionRepository: AuthSessionRepository by lazy {
         AuthSessionRepository(
@@ -26,8 +33,10 @@ class EmofahApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        authSessionRepository.registerAsGlobalTokenProvider()
         EmofahNotificationManager.ensureChannelsCreated(this)
-        SyncScheduler.ensurePeriodicSyncScheduled(this)
+        appScope.launch {
+            authSessionRepository.registerAsGlobalTokenProvider(refreshImmediately = true)
+            SyncScheduler.ensurePeriodicSyncScheduled(this@EmofahApplication)
+        }
     }
 }

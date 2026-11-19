@@ -3,7 +3,6 @@ package com.emofah.agencies.ui.screens
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.Settings
 import android.view.MotionEvent
@@ -17,12 +16,13 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,16 +39,15 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,7 +61,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -73,14 +71,18 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.emofah.agencies.camera.CapturedImageProcessor
 import com.emofah.agencies.camera.PreparedCaptureResult
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahCard
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahLoadingButton
+import com.emofah.agencies.ui.components.EmofahLocalImage
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /**
- * Stage 1.2 (Actions 1.2.1 – 1.2.3):
- * Direct CameraX product capture screen.
- * Opens camera directly when permission is granted, works 100% offline, provides
- * framing box, tap-to-focus, torch toggle, blur/low-light warnings, Retake, and Cancel.
+ * Direct CameraX product & receipt capture screen with off-main-thread review decoding.
  */
 @Composable
 fun CameraCaptureScreen(
@@ -180,47 +182,65 @@ private fun CameraPermissionDeniedView(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    val colors = MaterialTheme.emofahColors
+    Box(
         modifier = modifier
             .fillMaxSize()
             .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = Icons.Outlined.CameraAlt,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(52.dp),
-        )
-        Text(
-            text = "Camera Access Needed",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = "Emofah needs your camera to photograph one product at a time for instant visual identification and sales capture. No internet connection is required.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        Button(
-            onClick = onRequestAgain,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Allow Camera Access")
-        }
-        FilledTonalButton(
-            onClick = onOpenSettings,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Open App Settings")
-        }
-        OutlinedButton(
-            onClick = onCancel,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Cancel")
+        EmofahCard(contentPadding = PaddingValues(24.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = colors.infoContainer,
+                    modifier = Modifier.size(56.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Outlined.CameraAlt,
+                            contentDescription = null,
+                            tint = colors.info,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
+                Text(
+                    text = "Camera Access Needed",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                )
+                Text(
+                    text = "Emofah uses your camera to photograph one product or receipt at a time for instant identification. Works completely offline.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textMuted,
+                    textAlign = TextAlign.Center,
+                )
+                EmofahLoadingButton(
+                    text = "Allow Camera Access",
+                    onClick = onRequestAgain,
+                    height = 48.dp,
+                )
+                FilledTonalButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                ) {
+                    Text("Open App Settings")
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                ) {
+                    Text("Cancel")
+                }
+            }
         }
     }
 }
@@ -252,7 +272,11 @@ private fun CameraXViewfinder(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -287,7 +311,6 @@ private fun CameraXViewfinder(
                     ContextCompat.getMainExecutor(ctx),
                 )
 
-                // Tap-to-focus support (Action 1.2.2)
                 previewView.setOnTouchListener { view, event ->
                     if (event.action == MotionEvent.ACTION_UP) {
                         val factory = previewView.meteringPointFactory
@@ -305,28 +328,38 @@ private fun CameraXViewfinder(
             },
         )
 
-        // Framing Guide Overlay (One product at a time)
+        // Refined HUD Framing Guide Overlay
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .padding(horizontal = 32.dp)
+                .padding(horizontal = 28.dp)
                 .fillMaxWidth()
-                .height(260.dp)
-                .border(2.dp, Color(0xFF43B1D4), RoundedCornerShape(24.dp)),
+                .height(268.dp)
+                .border(
+                    width = 1.5.dp,
+                    color = Color.White.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                ),
         ) {
-            Text(
-                text = framingHint,
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
+            Surface(
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp)
-                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            )
+                    .padding(bottom = 14.dp, start = 12.dp, end = 12.dp),
+            ) {
+                Text(
+                    text = framingHint,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
         }
 
-        // Top Bar: Cancel & Torch
+        // Translucent HUD Top Controls
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -335,39 +368,46 @@ private fun CameraXViewfinder(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = onCancel,
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+            Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.56f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Close,
-                    contentDescription = "Cancel",
-                    tint = Color.White,
-                )
+                IconButton(onClick = onCancel) {
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = "Cancel",
+                        tint = Color.White,
+                    )
+                }
             }
 
-            IconButton(
-                onClick = {
-                    val next = !torchEnabled
-                    torchEnabled = next
-                    boundCamera?.cameraControl?.enableTorch(next)
-                },
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+            Surface(
+                shape = CircleShape,
+                color = if (torchEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.56f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
             ) {
-                Icon(
-                    imageVector = if (torchEnabled) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
-                    contentDescription = "Toggle flash",
-                    tint = Color.White,
-                )
+                IconButton(
+                    onClick = {
+                        val next = !torchEnabled
+                        torchEnabled = next
+                        boundCamera?.cameraControl?.enableTorch(next)
+                    },
+                ) {
+                    Icon(
+                        imageVector = if (torchEnabled) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
+                        contentDescription = "Toggle flash",
+                        tint = Color.White,
+                    )
+                }
             }
         }
 
-        // Error banner if capture fails
+        // Non-blocking error notice
         if (captureError != null) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 76.dp, start = 16.dp, end = 16.dp),
@@ -381,61 +421,87 @@ private fun CameraXViewfinder(
             }
         }
 
-        // Bottom Capture Control
-        Box(
+        // Bottom Capture Bar
+        Surface(
+            color = Color.Black.copy(alpha = 0.72f),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.65f))
-                .padding(vertical = 22.dp, horizontal = 24.dp),
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth(),
         ) {
-            if (isProcessing) {
-                CircularProgressIndicator(color = Color.White)
-            } else {
-                Button(
-                    onClick = {
-                        val cap = imageCapture ?: return@Button
-                        onError(null)
-                        onProcessingChanged(true)
-                        val rawFile = processor.createTempCaptureFile()
-                        val outputOptions = ImageCapture.OutputFileOptions.Builder(rawFile).build()
-                        cap.takePicture(
-                            outputOptions,
-                            ContextCompat.getMainExecutor(context),
-                            object : ImageCapture.OnImageSavedCallback {
-                                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                                    scope.launch {
-                                        val prepared = processor.prepareCapture(rawFile)
-                                        onProcessingChanged(false)
-                                        if (prepared != null) {
-                                            onPrepared(prepared)
-                                        } else {
-                                            onError("Could not process captured image. Please retake.")
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 20.dp, horizontal = 24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (isProcessing) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.5.dp,
+                        )
+                        Text(
+                            text = "Preparing photo...",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            val cap = imageCapture ?: return@Button
+                            onError(null)
+                            onProcessingChanged(true)
+                            val rawFile = processor.createTempCaptureFile()
+                            val outputOptions = ImageCapture.OutputFileOptions.Builder(rawFile).build()
+                            cap.takePicture(
+                                outputOptions,
+                                ContextCompat.getMainExecutor(context),
+                                object : ImageCapture.OnImageSavedCallback {
+                                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                                        scope.launch {
+                                            val prepared = processor.prepareCapture(rawFile)
+                                            onProcessingChanged(false)
+                                            if (prepared != null) {
+                                                onPrepared(prepared)
+                                            } else {
+                                                onError("Could not process captured image. Please retake.")
+                                            }
                                         }
                                     }
-                                }
 
-                                override fun onError(exception: ImageCaptureException) {
-                                    onProcessingChanged(false)
-                                    onError(exception.message ?: "Capture failed. Please try again.")
-                                }
-                            },
+                                    override fun onError(exception: ImageCaptureException) {
+                                        onProcessingChanged(false)
+                                        onError(exception.message ?: "Capture failed. Please try again.")
+                                    }
+                                },
+                            )
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color.Black,
+                        ),
+                        modifier = Modifier
+                            .height(54.dp)
+                            .fillMaxWidth(0.78f),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CameraAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
                         )
-                    },
-                    shape = CircleShape,
-                    modifier = Modifier.height(58.dp).fillMaxWidth(0.7f),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.CameraAlt,
-                        contentDescription = null,
-                    )
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Text(
-                        text = captureButtonLabel,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text(
+                            text = captureButtonLabel,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
         }
@@ -452,65 +518,49 @@ private fun CapturedPhotoReviewView(
     onUsePhoto: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val previewBitmap = remember(result.recognitionCopyPath) {
-        BitmapFactory.decodeFile(result.recognitionCopyPath)
-    }
-
+    val colors = MaterialTheme.emofahColors
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = reviewTitle,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-        )
-
-        if (previewBitmap != null) {
-            Image(
-                bitmap = previewBitmap.asImageBitmap(),
-                contentDescription = "Captured product photograph",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color.Black.copy(alpha = 0.08f)),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = reviewTitle,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary,
+            )
+            EmofahStatusBadge(
+                text = "${result.recognitionWidth}×${result.recognitionHeight}",
+                tone = EmofahBadgeTone.NEUTRAL,
             )
         }
 
-        result.quality.warningMessage?.let { warning ->
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                ),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.WarningAmber,
-                        contentDescription = null,
-                    )
-                    Text(
-                        text = warning,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
-
-        Text(
-            text = "Prepared ${result.recognitionWidth}×${result.recognitionHeight}px recognition copy (offline ready)",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        EmofahLocalImage(
+            path = result.recognitionCopyPath,
+            contentDescription = "Captured product photograph",
+            fallbackIcon = Icons.Outlined.CameraAlt,
+            maxDimensionPx = 1024,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clip(RoundedCornerShape(20.dp)),
         )
+
+        result.quality.warningMessage?.let { warning ->
+            EmofahFeedbackBanner(
+                title = "Photo Clarity Notice",
+                message = warning,
+                tone = EmofahBadgeTone.WARNING,
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -518,13 +568,19 @@ private fun CapturedPhotoReviewView(
         ) {
             OutlinedButton(
                 onClick = onCancel,
-                modifier = Modifier.weight(1f).height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(50.dp),
             ) {
                 Text("Cancel")
             }
             FilledTonalButton(
                 onClick = onRetake,
-                modifier = Modifier.weight(1f).height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(50.dp),
             ) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.size(6.dp))
@@ -532,17 +588,11 @@ private fun CapturedPhotoReviewView(
             }
         }
 
-        Button(
+        EmofahLoadingButton(
+            text = confirmButtonLabel,
             onClick = onUsePhoto,
-            modifier = Modifier.fillMaxWidth().height(54.dp),
-        ) {
-            Icon(Icons.Outlined.Check, contentDescription = null)
-            Spacer(Modifier.size(8.dp))
-            Text(
-                text = confirmButtonLabel,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+            icon = Icons.Outlined.Check,
+            height = 54.dp,
+        )
     }
 }

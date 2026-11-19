@@ -1,9 +1,11 @@
 package com.emofah.agencies.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,19 +24,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Print
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Remove
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,16 +64,25 @@ import com.emofah.agencies.services.ServiceOperationDraft
 import com.emofah.agencies.services.ServiceOperationResult
 import com.emofah.agencies.services.ServiceOperationType
 import com.emofah.agencies.services.ServiceOperationValidator
+import com.emofah.agencies.ui.components.EmofahAnimatedVisibility
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahCard
+import com.emofah.agencies.ui.components.EmofahEmptyState
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahInteractiveCard
+import com.emofah.agencies.ui.components.EmofahLoadingButton
+import com.emofah.agencies.ui.components.EmofahSearchField
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
+import com.emofah.agencies.ui.theme.tabular
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Section 4 — Quick Service Operations (Printing, Photocopying, Scanning,
- * Internet Browsing, E-Government Assistance).
- * Records service type, quantity/duration, unit price, total revenue, payment method,
- * and optional consumables used (deducting real shared catalogue products when linked).
+ * Simplified Service Operations workflow (Printing, Photocopy, Scan, eCitizen, KRA, Typesetting, Design).
+ * Preserves exact 7 primary options, M-Pesa linking, and optional consumables stock link.
  */
 @Composable
 fun ServiceOperationsScreen(
@@ -88,20 +93,51 @@ fun ServiceOperationsScreen(
     onSubmitService: (ServiceOperationDraft) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    prefilledMpesaAmount: Double? = null,
+    prefilledMpesaRef: String? = null,
+    prefilledMpesaSender: String? = null,
+    onClearPrefilledMpesa: () -> Unit = {},
 ) {
+    val colors = MaterialTheme.emofahColors
     val activeCatalog = remember(cachedProducts) {
         cachedProducts.filter { !it.isArchived && it.id > 0L }
     }
+    val primaryServiceTypes = remember {
+        ServiceOperationType.entries.filter { it.isPrimaryShopOption }
+    }
+
+    fun formatAmountInput(value: Double): String {
+        if (value <= 0.0) return ""
+        return if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
+    }
 
     var draft by remember { mutableStateOf(ServiceOperationDraft()) }
-    var unitPriceText by remember(draft.clientServiceId) { mutableStateOf("") }
-    var customTotalText by remember(draft.clientServiceId) { mutableStateOf("") }
+    var unitPriceText by remember(draft.clientServiceId) { mutableStateOf(formatAmountInput(draft.unitPrice)) }
+    var discountText by remember(draft.clientServiceId) { mutableStateOf(formatAmountInput(draft.discountAmount)) }
+    var customTotalText by remember(draft.clientServiceId) {
+        mutableStateOf(draft.customTotalRevenue?.let { formatAmountInput(it) }.orEmpty())
+    }
+    var showAdvancedOptions by remember { mutableStateOf(false) }
     var pickingConsumableId by remember { mutableStateOf<String?>(null) }
     var lastCommittedDraft by remember { mutableStateOf<ServiceOperationDraft?>(null) }
     var lastCommittedReceipt by remember { mutableStateOf<DigitalReceiptData?>(null) }
     var previewedReceipt by remember { mutableStateOf<DigitalReceiptData?>(null) }
 
-    // Reset form IDs cleanly after an online or offline commit so rapid next entries never replay IDs
+    LaunchedEffect(prefilledMpesaAmount, prefilledMpesaRef, prefilledMpesaSender) {
+        if (prefilledMpesaAmount != null && prefilledMpesaAmount > 0.0) {
+            val noteParts = listOfNotNull(
+                prefilledMpesaRef?.takeIf { it.isNotBlank() }?.let { "M-Pesa $it" },
+                prefilledMpesaSender?.takeIf { it.isNotBlank() },
+            ).joinToString(" · ")
+            draft = draft.copy(
+                paymentMethod = PaymentMethod.MPESA,
+                customTotalRevenue = prefilledMpesaAmount,
+                customerNote = noteParts.ifBlank { draft.customerNote },
+            )
+            customTotalText = formatAmountInput(prefilledMpesaAmount)
+        }
+    }
+
     LaunchedEffect(lastResult) {
         if (lastResult is ServiceOperationResult.SuccessOnline ||
             lastResult is ServiceOperationResult.SavedOffline
@@ -114,11 +150,14 @@ fun ServiceOperationsScreen(
             )
             val prevType = draft.serviceType
             val prevMethod = draft.paymentMethod
-            draft = ServiceOperationDraft(
+            val freshDraft = ServiceOperationDraft(
                 serviceType = prevType,
+                unitPrice = prevType.defaultUnitPrice,
                 paymentMethod = prevMethod,
             )
-            unitPriceText = ""
+            draft = freshDraft
+            unitPriceText = formatAmountInput(freshDraft.unitPrice)
+            discountText = ""
             customTotalText = ""
             lastCommittedDraft = null
         }
@@ -152,29 +191,52 @@ fun ServiceOperationsScreen(
                 }
                 Column {
                     Text(
-                        text = "Service Operations",
+                        text = "Record Service",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary,
                     )
                     Text(
-                        text = "Printing, cyber & e-gov assistance",
+                        text = "Printing, photocopy, eCitizen & forms",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textMuted,
                     )
                 }
             }
             TextButton(
                 onClick = {
-                    draft = ServiceOperationDraft(serviceType = draft.serviceType)
-                    unitPriceText = ""
+                    val fresh = ServiceOperationDraft(
+                        serviceType = draft.serviceType,
+                        unitPrice = draft.serviceType.defaultUnitPrice,
+                    )
+                    draft = fresh
+                    unitPriceText = formatAmountInput(fresh.unitPrice)
+                    discountText = ""
                     customTotalText = ""
+                    onClearPrefilledMpesa()
                 },
             ) {
-                Text("Reset")
+                Text("Clear")
             }
         }
 
-        // Result feedback banner
+        if (prefilledMpesaAmount != null && prefilledMpesaAmount > 0.0) {
+            EmofahFeedbackBanner(
+                title = "Linking M-Pesa Payment: Ksh ${prefilledMpesaAmount.roundToInt()}",
+                message = listOfNotNull(
+                    prefilledMpesaSender?.takeIf { it.isNotBlank() }?.let { "From $it" },
+                    prefilledMpesaRef?.takeIf { it.isNotBlank() }?.let { "Ref $it" },
+                ).joinToString(" · ").ifBlank { "Pick service type and tap Record" },
+                tone = EmofahBadgeTone.INFO,
+                actionLabel = "Unlink",
+                onAction = {
+                    onClearPrefilledMpesa()
+                    draft = draft.copy(customTotalRevenue = null)
+                    customTotalText = ""
+                },
+            )
+        }
+
         if (lastResult != null) {
             ServiceResultBanner(
                 result = lastResult,
@@ -183,206 +245,302 @@ fun ServiceOperationsScreen(
             )
         }
 
-        // 1. Service Type Selector
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+        // 1. Service Type Selector (7 simplified options in clean 2-column grid)
+        EmofahCard(contentPadding = PaddingValues(14.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Print,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = "1. Select Service Type",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Outlined.Print,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = "1. What Service Did You Do?",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
 
+            primaryServiceTypes.chunked(2).forEach { pair ->
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    ServiceOperationType.entries.forEach { type ->
-                        FilterChip(
-                            selected = draft.serviceType == type,
-                            onClick = {
-                                draft = draft.copy(serviceType = type)
-                            },
-                            label = { Text(type.label) },
-                        )
+                    pair.forEach { type ->
+                        val isSelected = draft.serviceType == type
+                        val onSelectService = {
+                            draft = draft.copy(
+                                serviceType = type,
+                                unitPrice = type.defaultUnitPrice,
+                                discountAmount = 0.0,
+                            )
+                            unitPriceText = formatAmountInput(type.defaultUnitPrice)
+                            discountText = ""
+                        }
+                        if (isSelected) {
+                            Button(
+                                onClick = onSelectService,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text(
+                                    text = "${type.label} (${type.defaultUnitPrice.roundToInt()})",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelLarge.tabular(),
+                                )
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = onSelectService,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text(
+                                    text = "${type.label} (${type.defaultUnitPrice.roundToInt()})",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.labelLarge.tabular(),
+                                )
+                            }
+                        }
+                    }
+                    if (pair.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
             }
         }
 
-        // 2. Quantity / Duration, Price & Payment Method
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+        // 2. Quantity, Price, Discount & Payment Method
+        EmofahCard(contentPadding = PaddingValues(14.dp)) {
+            Text(
+                text = "2. Count, Price & Payment",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(
-                    text = "2. Quantity / Duration & Revenue",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                OutlinedButton(
+                    onClick = {
+                        if (draft.quantityOrDuration > 1) {
+                            draft = draft.copy(quantityOrDuration = draft.quantityOrDuration - 1)
+                        }
+                    },
+                    enabled = draft.quantityOrDuration > 1 && !isSubmitting,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(Icons.Outlined.Remove, contentDescription = "Decrease")
+                }
+
+                OutlinedTextField(
+                    value = draft.quantityOrDuration.toString(),
+                    onValueChange = { raw ->
+                        val parsed = raw.filter { it.isDigit() }.toIntOrNull()
+                        if (parsed != null && parsed >= 1) {
+                            draft = draft.copy(quantityOrDuration = parsed.coerceAtMost(99999))
+                        } else if (raw.isBlank()) {
+                            draft = draft.copy(quantityOrDuration = 1)
+                        }
+                    },
+                    label = { Text("How many ${draft.serviceType.unitLabel}?") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
                 )
 
-                // Quantity/Duration Stepper
+                OutlinedButton(
+                    onClick = {
+                        draft = draft.copy(quantityOrDuration = (draft.quantityOrDuration + 1).coerceAtMost(99999))
+                    },
+                    enabled = !isSubmitting,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = "Increase")
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(1, 2, 5, 10).forEach { presetQty ->
+                    FilterChip(
+                        selected = draft.quantityOrDuration == presetQty,
+                        onClick = { draft = draft.copy(quantityOrDuration = presetQty) },
+                        label = { Text("$presetQty", style = MaterialTheme.typography.labelMedium.tabular()) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedTextField(
+                    value = unitPriceText,
+                    onValueChange = { raw ->
+                        unitPriceText = raw
+                        val parsed = raw.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        draft = draft.copy(
+                            unitPrice = parsed,
+                            customTotalRevenue = null,
+                        )
+                        customTotalText = ""
+                    },
+                    label = { Text("Price Each (Ksh)") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.weight(1f),
+                )
+
+                OutlinedTextField(
+                    value = discountText,
+                    onValueChange = { raw ->
+                        discountText = raw
+                        val parsed = raw.trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        draft = draft.copy(
+                            discountAmount = parsed,
+                            customTotalRevenue = null,
+                        )
+                        customTotalText = ""
+                    },
+                    label = { Text("Discount (Ksh)") },
+                    placeholder = { Text("0") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Surface(
+                color = colors.infoContainer,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, colors.info.copy(alpha = 0.22f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 11.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            if (draft.quantityOrDuration > 1) {
-                                draft = draft.copy(quantityOrDuration = draft.quantityOrDuration - 1)
-                            }
-                        },
-                        enabled = draft.quantityOrDuration > 1 && !isSubmitting,
-                    ) {
-                        Icon(Icons.Outlined.Remove, contentDescription = "Decrease")
-                    }
-
-                    OutlinedTextField(
-                        value = draft.quantityOrDuration.toString(),
-                        onValueChange = { raw ->
-                            val parsed = raw.filter { it.isDigit() }.toIntOrNull()
-                            if (parsed != null && parsed >= 1) {
-                                draft = draft.copy(quantityOrDuration = parsed.coerceAtMost(99999))
-                            } else if (raw.isBlank()) {
-                                draft = draft.copy(quantityOrDuration = 1)
-                            }
-                        },
-                        label = { Text("Qty / Duration (${draft.serviceType.unitLabel})") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                    )
-
-                    OutlinedButton(
-                        onClick = {
-                            draft = draft.copy(quantityOrDuration = (draft.quantityOrDuration + 1).coerceAtMost(99999))
-                        },
-                        enabled = !isSubmitting,
-                    ) {
-                        Icon(Icons.Outlined.Add, contentDescription = "Increase")
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    OutlinedTextField(
-                        value = unitPriceText,
-                        onValueChange = { raw ->
-                            unitPriceText = raw
-                            val parsed = raw.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-                            draft = draft.copy(unitPrice = parsed)
-                        },
-                        label = { Text("Unit Price (Ksh / ${draft.serviceType.unitLabel.trimEnd('s')})") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.weight(1f),
-                    )
-
-                    OutlinedTextField(
-                        value = customTotalText,
-                        onValueChange = { raw ->
-                            customTotalText = raw
-                            val parsed = raw.trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull()?.coerceAtLeast(0.0)
-                            draft = draft.copy(customTotalRevenue = parsed)
-                        },
-                        label = { Text("Total Override (Opt)") },
-                        placeholder = { Text("Auto") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                // Revenue Highlight Box
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    Column {
                         Text(
                             text = "${draft.serviceType.label} · ${draft.quantityOrDuration} ${draft.serviceType.unitLabel}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = colors.textPrimary,
                         )
-                        Text(
-                            text = "Ksh ${draft.effectiveRevenue.roundToInt()}",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
+                        if (draft.discountAmount > 0.0 && draft.customTotalRevenue == null) {
+                            Text(
+                                text = "Discount: -Ksh ${draft.discountAmount.roundToInt()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.textMuted,
+                            )
+                        } else if (draft.customTotalRevenue != null) {
+                            Text(
+                                text = "Using custom total",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.info,
+                            )
+                        }
                     }
+                    Text(
+                        text = "Ksh ${draft.effectiveRevenue.roundToInt()}",
+                        style = MaterialTheme.typography.titleMedium.tabular(),
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary,
+                    )
                 }
+            }
 
-                // Payment Method
-                Text(
-                    text = "Payment Method",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Medium,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    PaymentMethod.entries.forEach { method ->
-                        FilterChip(
-                            selected = draft.paymentMethod == method,
+            Text(
+                text = "How Did Customer Pay?",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PaymentMethod.entries.forEach { method ->
+                    val selected = draft.paymentMethod == method
+                    if (selected) {
+                        Button(
                             onClick = { draft = draft.copy(paymentMethod = method) },
-                            label = { Text(method.label) },
-                        )
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(method.label, fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { draft = draft.copy(paymentMethod = method) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(method.label)
+                        }
                     }
                 }
+            }
+
+            OutlinedButton(
+                onClick = { showAdvancedOptions = !showAdvancedOptions },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    if (showAdvancedOptions) {
+                        "Hide Extra Options"
+                    } else {
+                        "Optional: Custom Total, Note & Paper/Ink"
+                    }
+                )
+            }
+        }
+
+        EmofahAnimatedVisibility(visible = showAdvancedOptions) {
+            EmofahCard(contentPadding = PaddingValues(14.dp)) {
+                OutlinedTextField(
+                    value = customTotalText,
+                    onValueChange = { raw ->
+                        customTotalText = raw
+                        val parsed = raw.trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull()?.coerceAtLeast(0.0)
+                        draft = draft.copy(customTotalRevenue = parsed)
+                    },
+                    label = { Text("Exact Total Amount (Optional)") },
+                    placeholder = { Text("Leave blank to calculate automatically") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
                 OutlinedTextField(
                     value = draft.customerNote,
                     onValueChange = { draft = draft.copy(customerNote = it) },
-                    label = { Text("Service Note (optional)") },
-                    placeholder = { Text("e.g. Color A4, KRA PIN / eCitizen, PC #2") },
+                    label = { Text("Short Note (optional)") },
+                    placeholder = { Text("e.g. eCitizen certificate, P3 form, M-Pesa ref") },
                     singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-        }
 
-        // 3. Consumables Used (Optional, links to shared products if stock deduction needed)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+                HorizontalDivider(color = colors.borderSubtle)
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -390,14 +548,14 @@ fun ServiceOperationsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "3. Consumables Used (Optional)",
+                            text = "Paper / Ink Used (Optional)",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Record paper/ink used; link catalogue SKU only to deduct shared stock.",
+                            text = "Add only if you want to record paper/ink used or reduce shop stock.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = colors.textMuted,
                         )
                     }
                     OutlinedButton(
@@ -411,6 +569,7 @@ fun ServiceOperationsScreen(
                             )
                         },
                         enabled = !isSubmitting,
+                        shape = RoundedCornerShape(10.dp),
                     ) {
                         Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
@@ -418,7 +577,6 @@ fun ServiceOperationsScreen(
                     }
                 }
 
-                // Quick-add suggested consumables
                 if (draft.serviceType.suggestedConsumables.isNotEmpty()) {
                     Row(
                         modifier = Modifier
@@ -451,168 +609,125 @@ fun ServiceOperationsScreen(
                     }
                 }
 
-                if (draft.consumables.isEmpty()) {
-                    Text(
-                        text = "No consumables attached. Tap '+ Add' or a suggestion above if paper/ink was consumed.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                draft.consumables.forEachIndexed { idx, line ->
+                    ConsumableLineCard(
+                        index = idx,
+                        line = line,
+                        isSubmitting = isSubmitting,
+                        onChange = { updatedLine ->
+                            draft = draft.copy(
+                                consumables = draft.consumables.map {
+                                    if (it.localLineId == updatedLine.localLineId) updatedLine else it
+                                }
+                            )
+                        },
+                        onPickCatalogueProduct = {
+                            pickingConsumableId = line.localLineId
+                        },
+                        onRemove = {
+                            draft = draft.copy(
+                                consumables = draft.consumables.filterNot { it.localLineId == line.localLineId }
+                            )
+                        },
                     )
-                } else {
-                    draft.consumables.forEachIndexed { idx, line ->
-                        ConsumableLineCard(
-                            index = idx,
-                            line = line,
-                            isSubmitting = isSubmitting,
-                            onChange = { updatedLine ->
-                                draft = draft.copy(
-                                    consumables = draft.consumables.map {
-                                        if (it.localLineId == updatedLine.localLineId) updatedLine else it
-                                    }
-                                )
-                            },
-                            onPickCatalogueProduct = {
-                                pickingConsumableId = line.localLineId
-                            },
-                            onRemove = {
-                                draft = draft.copy(
-                                    consumables = draft.consumables.filterNot { it.localLineId == line.localLineId }
-                                )
-                            },
-                        )
-                    }
                 }
             }
         }
 
-        // Validation hint
         if (!validation.isValid) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.WarningAmber,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = validation.errors.first(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
+            EmofahFeedbackBanner(
+                title = "Check Entry",
+                message = validation.errors.first(),
+                tone = EmofahBadgeTone.DANGER,
+            )
         }
 
         // Primary Submit Action
-        Button(
+        EmofahLoadingButton(
+            text = "RECORD ${draft.serviceType.label.uppercase()} · KSH ${draft.effectiveRevenue.roundToInt()}",
+            loadingText = "Recording Service...",
+            isLoading = isSubmitting,
+            enabled = validation.isValid && !isSubmitting,
+            height = 56.dp,
             onClick = {
                 lastCommittedDraft = draft
                 lastCommittedReceipt = null
                 onSubmitService(draft)
             },
-            enabled = validation.isValid && !isSubmitting,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp),
-            shape = MaterialTheme.shapes.large,
-        ) {
-            if (isSubmitting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
-                Spacer(Modifier.width(10.dp))
-                Text("Recording Service...")
-            } else {
-                Text(
-                    text = "RECORD ${draft.serviceType.label.uppercase()} · KSH ${draft.effectiveRevenue.roundToInt()}",
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
+        )
 
         // Recent Service Activity
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "Recent Service Operations (${recentServiceEvents.size})",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+        EmofahCard(contentPadding = PaddingValues(14.dp)) {
+            Text(
+                text = "Recent Service Operations (${recentServiceEvents.size})",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (recentServiceEvents.isEmpty()) {
+                EmofahEmptyState(
+                    icon = Icons.Outlined.Print,
+                    title = "No Services Yet",
+                    message = "Recorded print, copy, and cyber services from this device will appear here.",
                 )
-                if (recentServiceEvents.isEmpty()) {
-                    Text(
-                        text = "No services recorded from this device yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    recentServiceEvents.take(15).forEach { evt ->
-                        val syncBadge = when (evt.syncStatus) {
-                            SyncState.SERVER_CONFIRMED -> "Synced"
-                            SyncState.CONFLICT -> "Conflict"
-                            else -> "Pending Sync"
-                        }
-                        Surface(
-                            color = MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    previewedReceipt = DigitalReceiptFormatter.buildFromServiceEntity(evt)
-                                },
+            } else {
+                recentServiceEvents.take(15).forEach { evt ->
+                    val syncBadge = when (evt.syncStatus) {
+                        SyncState.SERVER_CONFIRMED -> "Synced" to EmofahBadgeTone.SUCCESS
+                        SyncState.CONFLICT -> "Conflict" to EmofahBadgeTone.DANGER
+                        else -> "Pending Sync" to EmofahBadgeTone.WARNING
+                    }
+                    val formattedTime = remember(evt.eventTimestampEpochMs, timeFormat) {
+                        timeFormat.format(Date(evt.eventTimestampEpochMs))
+                    }
+                    EmofahInteractiveCard(
+                        onClick = {
+                            previewedReceipt = DigitalReceiptFormatter.buildFromServiceEntity(evt)
+                        },
+                        containerColor = colors.surfaceElevated,
+                        contentPadding = PaddingValues(12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
                             ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     Text(
                                         text = evt.counterparty ?: "Service",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                     )
+                                    EmofahStatusBadge(text = syncBadge.first, tone = syncBadge.second)
+                                }
+                                evt.rawEvidence?.takeIf { it.isNotBlank() }?.let { raw ->
                                     Text(
-                                        text = evt.rawEvidence ?: "",
+                                        text = raw,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = colors.textMuted,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    Text(
-                                        text = "${timeFormat.format(Date(evt.eventTimestampEpochMs))} · $syncBadge · Tap for receipt",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
                                 }
-                                Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = "+Ksh ${evt.amount.roundToInt()}",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    text = "$formattedTime · Tap for receipt",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.textMuted,
                                 )
                             }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "+Ksh ${evt.amount.roundToInt()}",
+                                style = MaterialTheme.typography.titleSmall.tabular(),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                         }
                     }
                 }
@@ -627,7 +742,6 @@ fun ServiceOperationsScreen(
         )
     }
 
-    // Catalogue SKU Picker Dialog for consumable stock deduction
     val activeConsumableId = pickingConsumableId
     if (activeConsumableId != null) {
         ConsumableCataloguePickerDialog(
@@ -678,6 +792,7 @@ private fun ConsumableLineCard(
     onPickCatalogueProduct: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     var qtyText by remember(line.localLineId) {
         mutableStateOf(
             if (line.usageQty % 1.0 == 0.0) line.usageQty.toInt().toString()
@@ -686,8 +801,9 @@ private fun ConsumableLineCard(
     }
 
     Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(10.dp),
+        color = colors.surfaceElevated,
+        border = BorderStroke(1.dp, colors.borderSubtle),
+        shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -722,6 +838,7 @@ private fun ConsumableLineCard(
                 onValueChange = { onChange(line.copy(consumableName = it)) },
                 label = { Text("Consumable Name") },
                 singleLine = true,
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -738,6 +855,7 @@ private fun ConsumableLineCard(
                     },
                     label = { Text("Usage Qty") },
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.weight(1f),
                 )
@@ -747,11 +865,12 @@ private fun ConsumableLineCard(
                     onValueChange = { onChange(line.copy(usageUnit = it)) },
                     label = { Text("Unit (sheets, ml)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.weight(1f),
                 )
             }
 
-            HorizontalDivider()
+            HorizontalDivider(color = colors.borderSubtle)
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -761,7 +880,7 @@ private fun ConsumableLineCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (line.linkedProductId != null) {
-                            "Linked SKU: ${line.linkedProductName ?: "#${line.linkedProductId}"}"
+                            "Linked item: ${line.linkedProductName ?: "#${line.linkedProductId}"}"
                         } else {
                             "Shared Stock Link: None (operational note only)"
                         },
@@ -802,12 +921,13 @@ private fun ConsumableLineCard(
                                 }
                             },
                             enabled = line.stockDeductQty > 0 && !isSubmitting,
+                            shape = RoundedCornerShape(10.dp),
                         ) {
                             Text("-")
                         }
                         Text(
                             text = line.stockDeductQty.toString(),
-                            style = MaterialTheme.typography.titleSmall,
+                            style = MaterialTheme.typography.titleSmall.tabular(),
                             fontWeight = FontWeight.Bold,
                         )
                         OutlinedButton(
@@ -815,6 +935,7 @@ private fun ConsumableLineCard(
                                 onChange(line.copy(stockDeductQty = (line.stockDeductQty + 1).coerceAtMost(999)))
                             },
                             enabled = !isSubmitting,
+                            shape = RoundedCornerShape(10.dp),
                         ) {
                             Text("+")
                         }
@@ -831,92 +952,61 @@ private fun ServiceResultBanner(
     receipt: DigitalReceiptData? = null,
     onViewReceipt: (DigitalReceiptData) -> Unit = {},
 ) {
-    val (bg, contentColor, title, detail, isError) = when (result) {
+    val (title, detail, tone, isError) = when (result) {
         is ServiceOperationResult.SuccessOnline -> Quintuple(
-            MaterialTheme.colorScheme.primaryContainer,
-            MaterialTheme.colorScheme.onPrimaryContainer,
-            if (result.alreadyCommitted) "Service Already Confirmed (Idempotent)" else "Service Recorded Online",
-            "${result.serviceLabel} · Ksh ${result.totalRevenue.roundToInt()} · Stock deducted: ${result.stockDeductedCount} unit(s).",
+            if (result.alreadyCommitted) "Already Saved" else "Service Saved",
+            "${result.serviceLabel} · Ksh ${result.totalRevenue.roundToInt()} · Stock updated: ${result.stockDeductedCount} item(s).",
+            EmofahBadgeTone.SUCCESS,
             false,
         )
 
         is ServiceOperationResult.SavedOffline -> Quintuple(
-            MaterialTheme.colorScheme.secondaryContainer,
-            MaterialTheme.colorScheme.onSecondaryContainer,
-            "Service Queued Offline",
-            "${result.serviceLabel} · Ksh ${result.totalRevenue.roundToInt()} · ${result.reason}",
+            "Saved on Phone (Offline)",
+            "${result.serviceLabel} · Ksh ${result.totalRevenue.roundToInt()} · Will upload when internet returns.",
+            EmofahBadgeTone.WARNING,
             false,
         )
 
         is ServiceOperationResult.DuplicateIgnored -> Quintuple(
-            MaterialTheme.colorScheme.secondaryContainer,
-            MaterialTheme.colorScheme.onSecondaryContainer,
-            "Duplicate Prevented",
-            "Service ${result.clientServiceId.take(8)} already exists (${result.syncStatus}).",
+            "Already Recorded",
+            "This service was already saved (${result.syncStatus}).",
+            EmofahBadgeTone.INFO,
             false,
         )
 
         is ServiceOperationResult.Rejected -> Quintuple(
-            MaterialTheme.colorScheme.errorContainer,
-            MaterialTheme.colorScheme.onErrorContainer,
-            "Could Not Record Service",
+            "Could Not Save Service",
             result.message,
+            EmofahBadgeTone.DANGER,
             true,
         )
     }
 
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        EmofahFeedbackBanner(
+            title = title,
+            message = detail,
+            tone = tone,
+        )
+        if (!isError && receipt != null) {
+            OutlinedButton(
+                onClick = { onViewReceipt(receipt) },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(
-                    imageVector = if (isError) Icons.Outlined.WarningAmber else Icons.Outlined.CheckCircle,
-                    contentDescription = null,
-                    tint = contentColor,
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = contentColor,
-                    )
-                    Text(
-                        text = detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = contentColor,
-                    )
-                }
-            }
-            if (!isError && receipt != null) {
-                OutlinedButton(
-                    onClick = { onViewReceipt(receipt) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Outlined.ReceiptLong, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("View / Share Digital Receipt")
-                }
+                Icon(Icons.Outlined.ReceiptLong, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("View / Share Digital Receipt")
             }
         }
     }
 }
 
-private data class Quintuple<A, B, C, D, E>(
+private data class Quintuple<A, B, C, D>(
     val first: A,
     val second: B,
     val third: C,
     val fourth: D,
-    val fifth: E,
 )
 
 @Composable
@@ -926,6 +1016,7 @@ private fun ConsumableCataloguePickerDialog(
     onUnlink: () -> Unit,
     onSelectProduct: (ProductIdentity) -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     var query by remember { mutableStateOf("") }
     val filtered = remember(products, query) {
         val q = query.trim().lowercase()
@@ -938,16 +1029,15 @@ private fun ConsumableCataloguePickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Link Shared Catalogue SKU") },
+        shape = RoundedCornerShape(22.dp),
+        containerColor = colors.surfaceCard,
+        title = { Text("Pick Shop Item") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
+                EmofahSearchField(
                     value = query,
                     onValueChange = { query = it },
-                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                    placeholder = { Text("Search paper reams, ink bottles...") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = "Search paper reams, ink bottles...",
                 )
                 LazyColumn(
                     modifier = Modifier
@@ -957,8 +1047,9 @@ private fun ConsumableCataloguePickerDialog(
                 ) {
                     items(filtered, key = { it.id }) { prod ->
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(8.dp),
+                            color = colors.surfaceElevated,
+                            border = BorderStroke(1.dp, colors.borderSubtle),
+                            shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onSelectProduct(prod) },
@@ -973,8 +1064,8 @@ private fun ConsumableCataloguePickerDialog(
                                 )
                                 Text(
                                     text = "${prod.category} · Stock: ${prod.stockQty} · Sell Ksh ${prod.sellPrice.roundToInt()}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall.tabular(),
+                                    color = colors.textMuted,
                                 )
                             }
                         }

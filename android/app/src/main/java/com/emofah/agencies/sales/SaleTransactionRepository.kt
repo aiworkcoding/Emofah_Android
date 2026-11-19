@@ -12,6 +12,8 @@ import com.emofah.agencies.data.local.entities.SyncQueueEventEntity
 import com.emofah.agencies.data.local.entities.SyncState
 import com.emofah.agencies.data.sync.SyncEventType
 import com.emofah.agencies.data.sync.SyncQueuePolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -97,11 +99,11 @@ class SaleTransactionRepository(
     suspend fun recordSale(
         draft: PreparedSaleDraft,
         originalSellPrice: Double,
-    ): RecordSaleOutcome {
+    ): RecordSaleOutcome = withContext(Dispatchers.IO) {
         // Action 2.2.4: Fast local duplicate protection before hitting network or SQLite inserts
         val existingLocal = saleDao.getSaleByIdempotencyKey(draft.idempotencyKey)
         if (existingLocal != null) {
-            return RecordSaleOutcome.DuplicateIgnored(
+            return@withContext RecordSaleOutcome.DuplicateIgnored(
                 clientSaleId = existingLocal.clientSaleId,
                 syncStatus = existingLocal.syncStatus,
                 serverSaleId = existingLocal.serverSaleId,
@@ -111,13 +113,13 @@ class SaleTransactionRepository(
         // Domain guard: block non-positive quantities or invalid prices before Room or network commit
         val effectiveOriginalPrice = if (draft.originalSellPrice > 0.0) draft.originalSellPrice else originalSellPrice
         if (draft.quantity <= 0) {
-            return RecordSaleOutcome.Rejected("Quantity must be at least 1.")
+            return@withContext RecordSaleOutcome.Rejected("Quantity must be at least 1.")
         }
         if (!effectiveOriginalPrice.isFinite() || effectiveOriginalPrice <= 0.0 ||
             !draft.unitSellPrice.isFinite() || draft.unitSellPrice <= 0.0 ||
             !draft.totalAmount.isFinite() || draft.totalAmount <= 0.0
         ) {
-            return RecordSaleOutcome.Rejected("Selling price and total amount must be greater than zero.")
+            return@withContext RecordSaleOutcome.Rejected("Selling price and total amount must be greater than zero.")
         }
 
         // Action 2.3.2: Enforce role-based price override policy before DB or network calls
@@ -130,7 +132,7 @@ class SaleTransactionRepository(
             requireReason = true,
         )
         if (!priceCheck.isAllowed) {
-            return RecordSaleOutcome.Rejected(
+            return@withContext RecordSaleOutcome.Rejected(
                 message = priceCheck.errorMessage ?: "Unauthorized price override.",
             )
         }
@@ -157,7 +159,7 @@ class SaleTransactionRepository(
         )
 
         if (draft.productId < 0L) {
-            return commitOfflineFallback(
+            return@withContext commitOfflineFallback(
                 artifacts = artifacts,
                 draft = draft,
                 reason = "Product is an offline draft — sale queued to sync immediately after the new product syncs.",
@@ -192,7 +194,7 @@ class SaleTransactionRepository(
                         productDao = productDao,
                     )
 
-                    return RecordSaleOutcome.SuccessOnline(
+                    return@withContext RecordSaleOutcome.SuccessOnline(
                         clientSaleId = confirmedSale.clientSaleId,
                         serverSaleId = rpcResult.serverSaleId,
                         remainingServerQty = rpcResult.remainingQty,
@@ -204,14 +206,14 @@ class SaleTransactionRepository(
 
                 is SaleRpcOutcome.Rejected -> {
                     // Server rejected sale (e.g. stock already sold elsewhere): fail honestly
-                    return RecordSaleOutcome.Rejected(
+                    return@withContext RecordSaleOutcome.Rejected(
                         message = rpcResult.message,
                         serverAvailableQty = rpcResult.serverAvailableQty,
                     )
                 }
 
                 is SaleRpcOutcome.RpcMissing -> {
-                    return commitOfflineFallback(
+                    return@withContext commitOfflineFallback(
                         artifacts = artifacts,
                         draft = draft,
                         reason = "Saved locally offline — deploy Supabase record_android_sale SQL migration to sync to cloud.",
@@ -219,7 +221,7 @@ class SaleTransactionRepository(
                 }
 
                 is SaleRpcOutcome.AuthRequired -> {
-                    return commitOfflineFallback(
+                    return@withContext commitOfflineFallback(
                         artifacts = artifacts,
                         draft = draft,
                         reason = "Sign-in required to sync (${rpcResult.message}) — saved locally offline in Room queue.",
@@ -227,7 +229,7 @@ class SaleTransactionRepository(
                 }
 
                 is SaleRpcOutcome.NetworkOrTransientError -> {
-                    return commitOfflineFallback(
+                    return@withContext commitOfflineFallback(
                         artifacts = artifacts,
                         draft = draft,
                         reason = "Network unavailable (${rpcResult.message}) — saved locally offline and queued for sync.",
@@ -241,7 +243,7 @@ class SaleTransactionRepository(
         } else {
             "Device is offline — saved locally and queued for background sync."
         }
-        return commitOfflineFallback(
+        commitOfflineFallback(
             artifacts = artifacts,
             draft = draft,
             reason = offlineReason,

@@ -1,12 +1,11 @@
 package com.emofah.agencies.ui.screens
 
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,6 +14,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,20 +23,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CameraAlt
-import androidx.compose.material.icons.outlined.CloudDone
-import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PointOfSale
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Remove
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -43,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,14 +48,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.emofah.agencies.data.catalog.ProductIdentity
 import com.emofah.agencies.data.local.entities.LocalStockProjectionEntity
+import com.emofah.agencies.data.local.entities.PendingFinancialEventEntity
 import com.emofah.agencies.receipts.DigitalReceiptData
 import com.emofah.agencies.sales.PaymentMethod
 import com.emofah.agencies.sales.PreparedSaleDraft
@@ -68,9 +63,23 @@ import com.emofah.agencies.sales.PriceOverridePolicy
 import com.emofah.agencies.sales.SaleCalculator
 import com.emofah.agencies.sales.StaffRole
 import com.emofah.agencies.sales.StockPolicy
+import com.emofah.agencies.ui.components.EmofahAnimatedVisibility
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahCard
+import com.emofah.agencies.ui.components.EmofahEmptyState
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahInteractiveCard
+import com.emofah.agencies.ui.components.EmofahLoadingButton
+import com.emofah.agencies.ui.components.EmofahLocalImage
+import com.emofah.agencies.ui.components.EmofahSearchField
+import com.emofah.agencies.ui.components.EmofahSectionHeader
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
+import com.emofah.agencies.ui.theme.tabular
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 enum class SaleFeedbackKind {
     ONLINE_CONFIRMED,
@@ -86,11 +95,8 @@ data class SaleFeedbackUi(
 )
 
 /**
- * Stage 2.1 – 2.3 (Actions 2.1.1 – 2.3.2):
- * Frictionless single-product sale screen with:
- * - Default quantity = 1, persisted payment method, zero forced customer fields.
- * - Prominent one-touch RECORD SALE action and rapid return to Scan Product.
- * - Policy-guarded, audited price exception controls visible only to authorized roles.
+ * Refined single-product Record Sale screen with async product thumbnails,
+ * virtualized manual catalogue picker, tactile quantity stepper, and M-Pesa linking.
  */
 @Composable
 fun RecordSaleScreen(
@@ -110,10 +116,14 @@ fun RecordSaleScreen(
     onScanAnother: () -> Unit,
     onRecordSaleClick: (PreparedSaleDraft) -> Unit,
     modifier: Modifier = Modifier,
+    pendingMpesaEvent: PendingFinancialEventEntity? = null,
+    onClearPendingMpesa: () -> Unit = {},
 ) {
     if (selectedProduct == null) {
         NoProductSelectedView(
             cachedProducts = cachedProducts,
+            pendingMpesaEvent = pendingMpesaEvent,
+            onClearPendingMpesa = onClearPendingMpesa,
             onScanProduct = onScanAnother,
             onPickProduct = onSelectProductManually,
             modifier = modifier,
@@ -121,6 +131,7 @@ fun RecordSaleScreen(
         return
     }
 
+    val colors = MaterialTheme.emofahColors
     val canOverridePrice = remember(staffRole) {
         PriceOverridePolicy.canOverridePrice(staffRole)
     }
@@ -160,23 +171,18 @@ fun RecordSaleScreen(
         )
     }
 
-    // Stable draft identity per product sale session so retries cannot duplicate,
-    // incrementing saleSessionNonce only after a completed sale clears it.
     val sessionDraftSeed = remember(selectedProduct.id, saleSessionNonce) {
         SaleCalculator.createDraft(selectedProduct, 1, selectedPaymentMethod)
     }
 
-    val photoBitmap = remember(cachedPhotoPath) {
-        cachedPhotoPath?.let { BitmapFactory.decodeFile(it) }
-    }
     val availableQty = stockProjection?.provisionalAvailableQty ?: selectedProduct.stockQty
     val freshnessText = remember(stockProjection) {
         if (stockProjection == null) {
-            "Cached stock"
+            "Saved on phone"
         } else {
             val time = SimpleDateFormat("HH:mm", Locale.getDefault())
                 .format(Date(stockProjection.serverUpdatedAtEpochMs))
-            if (stockProjection.pendingDeltaQty != 0) "Provisional · synced $time" else "Server synced $time"
+            if (stockProjection.pendingDeltaQty != 0) "Estimated · $time" else "Updated $time"
         }
     }
 
@@ -187,77 +193,56 @@ fun RecordSaleScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Post-Sale Confirmation Banner at top with immediate one-tap Return to Scan
-        lastSaleFeedback?.let { feedback ->
-            val isSuccess = feedback.kind != SaleFeedbackKind.REJECTED
-            val containerColor = when (feedback.kind) {
-                SaleFeedbackKind.ONLINE_CONFIRMED -> MaterialTheme.colorScheme.primaryContainer
-                SaleFeedbackKind.OFFLINE_QUEUED -> MaterialTheme.colorScheme.tertiaryContainer
-                SaleFeedbackKind.REJECTED -> MaterialTheme.colorScheme.errorContainer
-            }
-            val contentColor = when (feedback.kind) {
-                SaleFeedbackKind.ONLINE_CONFIRMED -> MaterialTheme.colorScheme.onPrimaryContainer
-                SaleFeedbackKind.OFFLINE_QUEUED -> MaterialTheme.colorScheme.onTertiaryContainer
-                SaleFeedbackKind.REJECTED -> MaterialTheme.colorScheme.onErrorContainer
-            }
-            val icon = when (feedback.kind) {
-                SaleFeedbackKind.ONLINE_CONFIRMED -> Icons.Outlined.CloudDone
-                SaleFeedbackKind.OFFLINE_QUEUED -> Icons.Outlined.CloudOff
-                SaleFeedbackKind.REJECTED -> Icons.Outlined.ErrorOutline
-            }
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = containerColor),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = contentColor,
-                        )
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = feedback.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = contentColor,
-                            )
-                            Text(
-                                text = feedback.detail,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = contentColor,
-                            )
-                        }
-                    }
+        if (pendingMpesaEvent != null) {
+            MpesaLinkBanner(
+                mpesaEvent = pendingMpesaEvent,
+                onClear = onClearPendingMpesa,
+            )
+        }
+
+        // Post-Sale Confirmation Card
+        EmofahAnimatedVisibility(visible = lastSaleFeedback != null) {
+            lastSaleFeedback?.let { feedback ->
+                val isSuccess = feedback.kind != SaleFeedbackKind.REJECTED
+                val tone = when (feedback.kind) {
+                    SaleFeedbackKind.ONLINE_CONFIRMED -> EmofahBadgeTone.SUCCESS
+                    SaleFeedbackKind.OFFLINE_QUEUED -> EmofahBadgeTone.WARNING
+                    SaleFeedbackKind.REJECTED -> EmofahBadgeTone.DANGER
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EmofahFeedbackBanner(
+                        title = feedback.title,
+                        message = feedback.detail,
+                        tone = tone,
+                    )
                     if (isSuccess) {
-                        Button(
-                            onClick = onScanAnother,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp),
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Icon(Icons.Outlined.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Scan Next Product", fontWeight = FontWeight.Bold)
-                        }
-                        feedback.receipt?.let { receiptData ->
-                            OutlinedButton(
-                                onClick = { previewedReceipt = receiptData },
+                            Button(
+                                onClick = onScanAnother,
+                                shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(44.dp),
+                                    .weight(1f)
+                                    .height(46.dp),
                             ) {
-                                Icon(Icons.Outlined.ReceiptLong, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("View / Share Receipt")
+                                Icon(Icons.Outlined.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Scan Next", fontWeight = FontWeight.SemiBold)
+                            }
+                            feedback.receipt?.let { receiptData ->
+                                OutlinedButton(
+                                    onClick = { previewedReceipt = receiptData },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(46.dp),
+                                ) {
+                                    Icon(Icons.Outlined.ReceiptLong, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Receipt")
+                                }
                             }
                         }
                     }
@@ -266,45 +251,33 @@ fun RecordSaleScreen(
         }
 
         // Product Summary Header
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-        ) {
+        EmofahCard(contentPadding = PaddingValues(14.dp)) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
+                EmofahLocalImage(
+                    path = cachedPhotoPath,
+                    contentDescription = selectedProduct.name,
+                    fallbackIcon = Icons.Outlined.Inventory2,
+                    maxDimensionPx = 256,
                     modifier = Modifier
                         .size(64.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (photoBitmap != null) {
-                        Image(
-                            bitmap = photoBitmap.asImageBitmap(),
-                            contentDescription = selectedProduct.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Outlined.Inventory2,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                        .clip(RoundedCornerShape(12.dp)),
+                )
 
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
                     Text(
                         text = selectedProduct.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = if (validation.isPriceOverridden) {
@@ -312,104 +285,139 @@ fun RecordSaleScreen(
                         } else {
                             "Unit price: Ksh ${selectedProduct.effectiveSellPrice.toInt()}"
                         },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (validation.isPriceOverridden) {
-                            MaterialTheme.colorScheme.tertiary
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
+                        style = MaterialTheme.typography.bodyMedium.tabular(),
+                        color = if (validation.isPriceOverridden) colors.warning else MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
                         text = "Available: $availableQty ($freshnessText)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = colors.textMuted,
                     )
                 }
             }
         }
 
-        // Quantity Control (Action 2.1.2 & 2.3.1: defaults to 1, instant stepper + numeric input)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            shape = RoundedCornerShape(18.dp),
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+        // Quantity Stepper & Quick Presets
+        EmofahCard(contentPadding = PaddingValues(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = "Quantity Sold",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(
-                        onClick = {
-                            val next = (parsedQty - 1).coerceAtLeast(1)
-                            quantityText = next.toString()
-                        },
-                        enabled = parsedQty > 1 && !isSubmitting,
-                        modifier = Modifier
-                            .size(52.dp)
-                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)),
-                    ) {
-                        Icon(Icons.Outlined.Remove, contentDescription = "Decrease quantity")
-                    }
+                EmofahStatusBadge(
+                    text = "${validation.quantity} unit(s)",
+                    tone = EmofahBadgeTone.NEUTRAL,
+                )
+            }
 
-                    OutlinedTextField(
-                        value = quantityText,
-                        onValueChange = { raw ->
-                            val filtered = raw.filter { it.isDigit() }.take(5)
-                            quantityText = filtered
-                        },
-                        singleLine = true,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = {
+                        val next = (parsedQty - 1).coerceAtLeast(1)
+                        quantityText = next.toString()
+                    },
+                    enabled = parsedQty > 1 && !isSubmitting,
+                    modifier = Modifier
+                        .size(50.dp)
+                        .background(colors.surfaceMuted, RoundedCornerShape(12.dp)),
+                ) {
+                    Icon(Icons.Outlined.Remove, contentDescription = "Decrease quantity")
+                }
+
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { raw ->
+                        val filtered = raw.filter { it.isDigit() }.take(5)
+                        quantityText = filtered
+                    },
+                    singleLine = true,
+                    enabled = !isSubmitting,
+                    shape = RoundedCornerShape(12.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    textStyle = MaterialTheme.typography.titleLarge.tabular().copy(
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+
+                IconButton(
+                    onClick = {
+                        val next = (parsedQty + 1).coerceAtLeast(1)
+                        quantityText = next.toString()
+                    },
+                    enabled = !isSubmitting,
+                    modifier = Modifier
+                        .size(50.dp)
+                        .background(colors.surfaceMuted, RoundedCornerShape(12.dp)),
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = "Increase quantity")
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(1, 2, 5, 10).forEach { preset ->
+                    FilterChip(
+                        selected = parsedQty == preset,
+                        onClick = { quantityText = preset.toString() },
+                        label = { Text("$preset", style = MaterialTheme.typography.labelMedium.tabular()) },
                         enabled = !isSubmitting,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        textStyle = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                        ),
                         modifier = Modifier.weight(1f),
                     )
+                }
+            }
+        }
 
-                    IconButton(
-                        onClick = {
-                            val next = (parsedQty + 1).coerceAtLeast(1)
-                            quantityText = next.toString()
-                        },
-                        enabled = !isSubmitting,
-                        modifier = Modifier
-                            .size(52.dp)
-                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)),
-                    ) {
-                        Icon(Icons.Outlined.Add, contentDescription = "Increase quantity")
+        // Payment Method Selector
+        EmofahCard(contentPadding = PaddingValues(14.dp)) {
+            Text(
+                text = "Payment Method",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PaymentMethod.entries.forEach { method ->
+                    val selected = selectedPaymentMethod == method
+                    if (selected) {
+                        Button(
+                            onClick = { onSelectPaymentMethod(method) },
+                            enabled = !isSubmitting,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(method.label, fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onSelectPaymentMethod(method) },
+                            enabled = !isSubmitting,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(method.label)
+                        }
                     }
                 }
             }
         }
 
-        // Payment Method Selector (Persisted across sales; zero forced customer details)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            PaymentMethod.entries.forEach { method ->
-                FilterChip(
-                    selected = selectedPaymentMethod == method,
-                    onClick = { onSelectPaymentMethod(method) },
-                    label = { Text(method.label) },
-                    enabled = !isSubmitting,
-                )
-            }
-        }
-
-        // Action 2.3.2: Role-guarded Price Exception Control
+        // Role-guarded Price Exception Control
         if (canOverridePrice) {
             if (!showPriceOverride) {
                 Row(
@@ -420,7 +428,7 @@ fun RecordSaleScreen(
                     Text(
                         text = "Authorized (${staffRole.label})",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textMuted,
                     )
                     TextButton(
                         onClick = {
@@ -435,54 +443,47 @@ fun RecordSaleScreen(
                     }
                 }
             } else {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(16.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                EmofahCard(contentPadding = PaddingValues(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                        Text(
+                            text = "Authorized Price Exception",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        TextButton(
+                            onClick = {
+                                showPriceOverride = false
+                                overrideReasonText = ""
+                                overridePriceText = selectedProduct.effectiveSellPrice.toInt().toString()
+                            },
+                            enabled = !isSubmitting,
                         ) {
-                            Text(
-                                text = "Authorized Price Exception",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            TextButton(
-                                onClick = {
-                                    showPriceOverride = false
-                                    overrideReasonText = ""
-                                    overridePriceText = selectedProduct.effectiveSellPrice.toInt().toString()
-                                },
-                                enabled = !isSubmitting,
-                            ) {
-                                Text("Reset")
-                            }
+                            Text("Reset")
                         }
-                        OutlinedTextField(
-                            value = overridePriceText,
-                            onValueChange = { overridePriceText = it },
-                            label = { Text("Override Unit Price (Reg. Ksh ${selectedProduct.effectiveSellPrice.toInt()})") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true,
-                            enabled = !isSubmitting,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        OutlinedTextField(
-                            value = overrideReasonText,
-                            onValueChange = { overrideReasonText = it },
-                            label = { Text("Override Reason (required for audit)") },
-                            singleLine = true,
-                            enabled = !isSubmitting,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
                     }
+                    OutlinedTextField(
+                        value = overridePriceText,
+                        onValueChange = { overridePriceText = it },
+                        label = { Text("Override Unit Price (Reg. Ksh ${selectedProduct.effectiveSellPrice.toInt()})") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        enabled = !isSubmitting,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = overrideReasonText,
+                        onValueChange = { overrideReasonText = it },
+                        label = { Text("Override Reason (required for audit)") },
+                        singleLine = true,
+                        enabled = !isSubmitting,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         } else {
@@ -496,70 +497,70 @@ fun RecordSaleScreen(
                 Icon(
                     imageVector = Icons.Outlined.Lock,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = colors.textMuted,
                     modifier = Modifier.size(15.dp),
                 )
                 Text(
                     text = "Registered price locked (${staffRole.label}). Manager/Supervisor needed to override.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textMuted,
                 )
             }
         }
 
-        // Warnings / Blocking messages
         validation.blockingReason?.let { reason ->
-            Text(
-                text = reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                fontWeight = FontWeight.Medium,
+            EmofahFeedbackBanner(
+                title = "Cannot complete sale",
+                message = reason,
+                tone = EmofahBadgeTone.DANGER,
             )
         }
 
         validation.stockWarning?.let { warning ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Outlined.WarningAmber, contentDescription = null)
-                    Text(text = warning, style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            EmofahFeedbackBanner(
+                title = "Stock Notice",
+                message = warning,
+                tone = EmofahBadgeTone.WARNING,
+            )
         }
 
-        // Calculated Total Banner
-        Card(
+        // Calculated Total Summary
+        Surface(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-            shape = RoundedCornerShape(18.dp),
+            color = colors.infoContainer,
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, colors.info.copy(alpha = 0.24f)),
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = "${validation.quantity} × Ksh ${validation.unitSellPrice.toInt()}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.tabular(),
                     fontWeight = FontWeight.Medium,
+                    color = colors.textPrimary,
                 )
                 Text(
                     text = "Total: Ksh ${validation.totalAmount.toInt()}",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleLarge.tabular(),
                     fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
                 )
             }
         }
 
-        // Prominent One-Touch RECORD SALE Button (Action 2.1.3)
-        Button(
+        // Primary Submit Action
+        EmofahLoadingButton(
+            text = "RECORD SALE · Ksh ${validation.totalAmount.toInt()}",
+            loadingText = "Recording Sale...",
+            isLoading = isSubmitting,
+            enabled = validation.isValidToRecord && !isSubmitting,
+            icon = Icons.Outlined.PointOfSale,
+            height = 58.dp,
             onClick = {
                 if (!isSubmitting && validation.isValidToRecord) {
                     val draft = SaleCalculator.createDraft(
@@ -574,44 +575,40 @@ fun RecordSaleScreen(
                     onRecordSaleClick(draft)
                 }
             },
-            enabled = validation.isValidToRecord && !isSubmitting,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(60.dp),
-        ) {
-            Icon(Icons.Outlined.PointOfSale, contentDescription = null)
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = if (isSubmitting) "RECORDING..." else "RECORD SALE · Ksh ${validation.totalAmount.toInt()}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+        )
 
-        // Action 2.3.1: Optional fast-scan mode toggle & instant Scan return
-        Row(
+        // Auto-return toggle
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = colors.surfaceCard,
+            border = BorderStroke(1.dp, colors.borderSubtle),
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .clickable { onToggleAutoReturnToScan(!autoReturnToScan) }
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { onToggleAutoReturnToScan(!autoReturnToScan) },
         ) {
-            Checkbox(
-                checked = autoReturnToScan,
-                onCheckedChange = onToggleAutoReturnToScan,
-            )
-            Text(
-                text = "Auto-open Scan camera right after recording a sale",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = autoReturnToScan,
+                    onCheckedChange = onToggleAutoReturnToScan,
+                )
+                Text(
+                    text = "Auto-open Scan camera right after recording a sale",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textMuted,
+                )
+            }
         }
 
         OutlinedButton(
             onClick = onScanAnother,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
         ) {
             Icon(Icons.Outlined.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
@@ -630,71 +627,122 @@ fun RecordSaleScreen(
 @Composable
 private fun NoProductSelectedView(
     cachedProducts: List<ProductIdentity>,
+    pendingMpesaEvent: PendingFinancialEventEntity? = null,
+    onClearPendingMpesa: () -> Unit = {},
     onScanProduct: () -> Unit,
     onPickProduct: (ProductIdentity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = MaterialTheme.emofahColors
     var search by remember { mutableStateOf("") }
     val filtered = remember(search, cachedProducts) {
         val q = search.trim().lowercase()
-        if (q.isEmpty()) cachedProducts.take(15)
-        else cachedProducts.filter { it.name.lowercase().contains(q) }.take(15)
+        if (q.isEmpty()) cachedProducts.take(30)
+        else cachedProducts.filter {
+            it.name.lowercase().contains(q) || it.category.lowercase().contains(q)
+        }.take(30)
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Button(
-            onClick = onScanProduct,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-        ) {
-            Icon(Icons.Outlined.CameraAlt, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Scan Product to Sell", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        if (pendingMpesaEvent != null) {
+            item(key = "mpesa_banner") {
+                MpesaLinkBanner(
+                    mpesaEvent = pendingMpesaEvent,
+                    onClear = onClearPendingMpesa,
+                )
+            }
         }
 
-        OutlinedTextField(
-            value = search,
-            onValueChange = { search = it },
-            label = { Text("Or pick from cached catalogue") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        item(key = "scan_hero") {
+            EmofahLoadingButton(
+                text = "Scan Product to Sell",
+                onClick = onScanProduct,
+                icon = Icons.Outlined.CameraAlt,
+                height = 56.dp,
+            )
+        }
 
-        filtered.forEach { item ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onPickProduct(item) },
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+        item(key = "search_bar") {
+            EmofahSearchField(
+                value = search,
+                onValueChange = { search = it },
+                placeholder = "Or pick a product by name or category",
+            )
+        }
+
+        item(key = "catalog_header") {
+            EmofahSectionHeader(
+                title = "Shop Catalogue (${filtered.size})",
+                subtitle = "Tap any item to start recording a sale",
+            )
+        }
+
+        if (filtered.isEmpty()) {
+            item(key = "empty_catalog") {
+                EmofahEmptyState(
+                    icon = Icons.Outlined.Inventory2,
+                    title = if (search.isBlank()) "No Saved Products Yet" else "No Matching Products",
+                    message = if (search.isBlank()) {
+                        "Connect to the internet once to download your shop catalogue, or scan a product."
+                    } else {
+                        "No items matched \"$search\"."
+                    },
+                )
+            }
+        } else {
+            items(filtered, key = { it.id }) { item ->
+                EmofahInteractiveCard(
+                    onClick = { onPickProduct(item) },
+                    contentPadding = PaddingValues(14.dp),
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.textPrimary,
+                            )
+                            Text(
+                                text = "Stock: ${item.stockQty} · ${item.category}",
+                                style = MaterialTheme.typography.labelSmall.tabular(),
+                                color = colors.textMuted,
+                            )
+                        }
                         Text(
-                            "Stock: ${item.stockQty} · ${item.category}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "Ksh ${item.effectiveSellPrice.toInt()}",
+                            style = MaterialTheme.typography.labelLarge.tabular(),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
-                    Text(
-                        "Ksh ${item.effectiveSellPrice.toInt()}",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun MpesaLinkBanner(
+    mpesaEvent: PendingFinancialEventEntity,
+    onClear: () -> Unit,
+) {
+    EmofahFeedbackBanner(
+        title = "Linking M-Pesa Payment: Ksh ${mpesaEvent.amount.roundToInt()}",
+        message = listOfNotNull(
+            mpesaEvent.counterparty?.takeIf { it.isNotBlank() }?.let { "From $it" },
+            mpesaEvent.transactionReference?.takeIf { it.isNotBlank() }?.let { "Ref $it" },
+        ).joinToString(" · ").ifBlank { "Pick the product sold to link this payment" },
+        tone = EmofahBadgeTone.INFO,
+        actionLabel = "Unlink",
+        onAction = onClear,
+    )
 }

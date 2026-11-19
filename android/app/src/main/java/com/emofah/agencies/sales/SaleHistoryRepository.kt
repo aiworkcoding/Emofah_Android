@@ -9,7 +9,9 @@ import com.emofah.agencies.data.local.entities.SyncQueueEventEntity
 import com.emofah.agencies.data.local.entities.SyncState
 import com.emofah.agencies.data.sync.SyncEventType
 import com.emofah.agencies.data.sync.SyncQueueStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 
@@ -38,14 +40,14 @@ class SaleHistoryRepository(
     suspend fun reverseSale(
         saleWithItems: LocalSaleWithItems,
         reason: String,
-    ): ReverseSaleOutcome {
+    ): ReverseSaleOutcome = withContext(Dispatchers.IO) {
         // Re-read authoritative local state to block concurrent double-reversal attempts.
         val currentRecord = saleDao.getSaleWithItems(saleWithItems.sale.clientSaleId)
-            ?: return ReverseSaleOutcome.Rejected("Sale record no longer exists.")
+            ?: return@withContext ReverseSaleOutcome.Rejected("Sale record no longer exists.")
 
         val sale = currentRecord.sale
         if (sale.isReversed) {
-            return ReverseSaleOutcome.AlreadyReversed(
+            return@withContext ReverseSaleOutcome.AlreadyReversed(
                 clientSaleId = sale.clientSaleId,
                 existingReason = sale.reversalReason,
             )
@@ -58,14 +60,14 @@ class SaleHistoryRepository(
             reason = reason,
         )
         if (!validation.isAllowed || validation.cleanReason == null) {
-            return ReverseSaleOutcome.Rejected(
+            return@withContext ReverseSaleOutcome.Rejected(
                 message = validation.errorMessage ?: "Sale reversal could not be validated."
             )
         }
 
         val cleanReason = validation.cleanReason
         val primaryItem = currentRecord.items.firstOrNull()
-            ?: return ReverseSaleOutcome.Rejected("Sale has no item details to restore stock safely.")
+            ?: return@withContext ReverseSaleOutcome.Rejected("Sale has no item details to restore stock safely.")
 
         val restoreQty = currentRecord.items.sumOf { it.quantity }.coerceAtLeast(1)
         val now = System.currentTimeMillis()
@@ -144,7 +146,7 @@ class SaleHistoryRepository(
             )
 
             val provisionalQty = productDao.getStockProjection(primaryItem.productId)?.provisionalAvailableQty ?: restoreQty
-            return ReverseSaleOutcome.ReversedUnsyncedLocally(
+            return@withContext ReverseSaleOutcome.ReversedUnsyncedLocally(
                 clientSaleId = sale.clientSaleId,
                 restoredQty = restoreQty,
                 provisionalRemainingQty = provisionalQty,
@@ -202,7 +204,7 @@ class SaleHistoryRepository(
                         financialAndDraftDao = financialAndDraftDao,
                         auditDao = auditDao,
                     )
-                    return ReverseSaleOutcome.ReversedOnline(
+                    return@withContext ReverseSaleOutcome.ReversedOnline(
                         clientSaleId = sale.clientSaleId,
                         serverSaleId = sale.serverSaleId,
                         restoredQty = restoreQty,
@@ -212,11 +214,11 @@ class SaleHistoryRepository(
                 }
 
                 is SaleReversalRpcOutcome.Rejected -> {
-                    return ReverseSaleOutcome.Rejected(rpcOutcome.message)
+                    return@withContext ReverseSaleOutcome.Rejected(rpcOutcome.message)
                 }
 
                 is SaleReversalRpcOutcome.RpcMissing -> {
-                    return queueOfflineReversal(
+                    return@withContext queueOfflineReversal(
                         sale = sale,
                         productId = primaryItem.productId,
                         restoreQty = restoreQty,
@@ -230,7 +232,7 @@ class SaleHistoryRepository(
                 }
 
                 is SaleReversalRpcOutcome.AuthRequired -> {
-                    return queueOfflineReversal(
+                    return@withContext queueOfflineReversal(
                         sale = sale,
                         productId = primaryItem.productId,
                         restoreQty = restoreQty,
@@ -244,7 +246,7 @@ class SaleHistoryRepository(
                 }
 
                 is SaleReversalRpcOutcome.NetworkOrTransientError -> {
-                    return queueOfflineReversal(
+                    return@withContext queueOfflineReversal(
                         sale = sale,
                         productId = primaryItem.productId,
                         restoreQty = restoreQty,
@@ -264,7 +266,7 @@ class SaleHistoryRepository(
         } else {
             "Offline mode — reversal recorded locally with provisional stock restoration and queued for sync."
         }
-        return queueOfflineReversal(
+        queueOfflineReversal(
             sale = sale,
             productId = primaryItem.productId,
             restoreQty = restoreQty,

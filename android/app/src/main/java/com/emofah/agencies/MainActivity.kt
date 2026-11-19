@@ -6,18 +6,40 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -26,8 +48,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -39,6 +66,7 @@ import com.emofah.agencies.data.catalog.ProductRegistrationRepository
 import com.emofah.agencies.data.catalog.RegisterProductOutcome
 import com.emofah.agencies.data.catalog.SupabaseProductRepository
 import com.emofah.agencies.data.local.entities.LocalStockProjectionEntity
+import com.emofah.agencies.data.local.entities.PendingFinancialEventEntity
 import com.emofah.agencies.data.sync.ConflictManager
 import com.emofah.agencies.data.sync.ConflictResolutionOutcome
 import com.emofah.agencies.data.sync.OfflineStatusSummary
@@ -62,6 +90,9 @@ import com.emofah.agencies.sales.SaleTransactionRepository
 import com.emofah.agencies.financial.FinancialMonitoringPrefs
 import com.emofah.agencies.financial.ManualFinancialOutcome
 import com.emofah.agencies.financial.MpesaCaptureOutcome
+import com.emofah.agencies.financial.MpesaInflowAttributionPolicy
+import com.emofah.agencies.financial.MpesaInflowAttributionStore
+import com.emofah.agencies.financial.MpesaInflowLinkTarget
 import com.emofah.agencies.financial.MpesaMonitoringRepository
 import com.emofah.agencies.stock.StockAdjustmentDraft
 import com.emofah.agencies.stock.StockAdjustmentRepository
@@ -97,6 +128,8 @@ import com.emofah.agencies.audit.AuditRecordUi
 import com.emofah.agencies.audit.AuditSyncRepository
 import com.emofah.agencies.audit.RemoteAuditFetchOutcome
 import com.emofah.agencies.auth.AuthActionOutcome
+import com.emofah.agencies.auth.AuthBootstrapOutcome
+import com.emofah.agencies.auth.AuthOtpResult
 import com.emofah.agencies.auth.AuthStatus
 import com.emofah.agencies.auth.EmofahPermission
 import com.emofah.agencies.auth.PermissionCheckResult
@@ -115,12 +148,23 @@ import com.emofah.agencies.receipts.DigitalReceiptFormatter
 import com.emofah.agencies.reporting.DailyActivitySummaryCalculator
 import com.emofah.agencies.services.ServiceOperationRepository
 import com.emofah.agencies.services.ServiceOperationResult
+import com.emofah.agencies.orders.StoreOrderStatus
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahMotion
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.components.LocalReducedMotion
+import com.emofah.agencies.ui.components.emofahPressScale
+import com.emofah.agencies.ui.components.rememberReducedMotionEnabled
 import com.emofah.agencies.ui.screens.ReceiptCaptureReviewScreen
 import com.emofah.agencies.ui.screens.ServiceOperationsScreen
 import com.emofah.agencies.ui.screens.StaffSignInDialog
 import com.emofah.agencies.ui.screens.UnknownProductRegistrationScreen
 import com.emofah.agencies.ui.theme.EmofahTheme
+import com.emofah.agencies.ui.theme.emofahColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -141,11 +185,14 @@ class MainActivity : ComponentActivity() {
         pendingNotificationRoute = intent?.getStringExtra(EmofahNotificationManager.EXTRA_TARGET_ROUTE)
         enableEdgeToEdge()
         setContent {
-            EmofahTheme {
-                EmofahAppShell(
-                    pendingNotificationRoute = pendingNotificationRoute,
-                    onConsumeNotificationRoute = { pendingNotificationRoute = null },
-                )
+            val reducedMotion = rememberReducedMotionEnabled()
+            CompositionLocalProvider(LocalReducedMotion provides reducedMotion) {
+                EmofahTheme {
+                    EmofahAppShell(
+                        pendingNotificationRoute = pendingNotificationRoute,
+                        onConsumeNotificationRoute = { pendingNotificationRoute = null },
+                    )
+                }
             }
         }
     }
@@ -231,6 +278,7 @@ fun EmofahAppShell(
         )
     }
     val financialMonitoringPrefs = remember(app) { FinancialMonitoringPrefs(app) }
+    val mpesaAttributionStore = remember(app) { MpesaInflowAttributionStore(app) }
     val mpesaMonitoringRepository = remember(app, financialMonitoringPrefs) {
         MpesaMonitoringRepository(
             database = app.database,
@@ -315,17 +363,21 @@ fun EmofahAppShell(
     var showAuthDialog by remember { mutableStateOf(false) }
 
     var isDeviceOnline by remember { mutableStateOf(connectivityChecker.isOnline()) }
-    DisposableEffect(app, connectivityChecker) {
+    DisposableEffect(app, connectivityChecker, scope) {
         val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                isDeviceOnline = connectivityChecker.isOnline()
-                authRepository.refreshUiStateFromStore()
+                scope.launch(Dispatchers.Main.immediate) {
+                    isDeviceOnline = connectivityChecker.isOnline()
+                    authRepository.refreshUiStateFromStoreAsync()
+                }
             }
 
             override fun onLost(network: Network) {
-                isDeviceOnline = connectivityChecker.isOnline()
-                authRepository.refreshUiStateFromStore()
+                scope.launch(Dispatchers.Main.immediate) {
+                    isDeviceOnline = connectivityChecker.isOnline()
+                    authRepository.refreshUiStateFromStoreAsync()
+                }
             }
         }
         runCatching { cm?.registerDefaultNetworkCallback(callback) }
@@ -388,6 +440,12 @@ fun EmofahAppShell(
         .collectAsState(initial = 0)
     val financialEvents by mpesaMonitoringRepository.observePendingFinancialEvents()
         .collectAsState(initial = emptyList())
+    val mpesaLinks by mpesaAttributionStore.linksFlow.collectAsState()
+    val latestUnlinkedMpesaInflow = remember(financialEvents, mpesaLinks) {
+        MpesaInflowAttributionPolicy.findLatestUnlinkedInflow(financialEvents, mpesaLinks)
+    }
+    var activeMpesaSaleEvent by remember { mutableStateOf<PendingFinancialEventEntity?>(null) }
+    var activeMpesaServiceEvent by remember { mutableStateOf<PendingFinancialEventEntity?>(null) }
     var financialMonitoringState by remember { mutableStateOf(financialMonitoringPrefs.readState()) }
     var financialUiMessage by remember { mutableStateOf<String?>(null) }
 
@@ -424,12 +482,29 @@ fun EmofahAppShell(
     var isRefreshingOrders by remember { mutableStateOf(false) }
     var isUpdatingOrder by remember { mutableStateOf(false) }
     var orderActionMessage by remember { mutableStateOf<String?>(null) }
-    var orderFeedSnapshot by remember { mutableStateOf(orderRepository.readCachedSnapshotImmediate(cachedProducts)) }
+    var orderFeedSnapshot by remember {
+        mutableStateOf(
+            OrderFeedSnapshot(
+                orders = emptyList(),
+                isFromCache = true,
+                statusMessage = null,
+            )
+        )
+    }
+
+    LaunchedEffect(orderRepository, cachedProducts.size) {
+        if (orderFeedSnapshot.lastFetchedEpochMs == null && orderFeedSnapshot.orders.isEmpty()) {
+            orderFeedSnapshot = orderRepository.readCachedSnapshotAsync(cachedProducts)
+        }
+    }
 
     LaunchedEffect(repository, syncQueueProcessor, stockLookupRepository, orderRepository, authRepository, auditSyncRepository, reliabilityRecoveryManager) {
+        // Yield after first frame so initial Home UI renders instantaneously before background I/O.
+        yield()
         val startupReport = reliabilityRecoveryManager.runStartupRecovery()
         reliabilitySnapshot = startupReport.snapshotAfter
         authRepository.ensureFreshSessionIfOnline()
+        yield()
         repository.syncCatalogueAndRebuildIndex()
         stockLookupRepository.fetchConfiguredThresholdOrNull()?.let { configured ->
             stockAlertThreshold = configured
@@ -454,7 +529,7 @@ fun EmofahAppShell(
             EmofahNotificationManager.notifyNewOrdersIfNeeded(app, fetchedOrders.orders)
         }
         syncTelemetry.recordAttempt(System.currentTimeMillis(), summary)
-        syncCheckpoint = syncTelemetry.readCheckpoint()
+        syncCheckpoint = withContext(Dispatchers.IO) { syncTelemetry.readCheckpoint() }
         reliabilitySnapshot = reliabilityRecoveryManager.inspectHealthSnapshot()
         if (summary.retryableCount > 0 || summary.skippedOffline) {
             SyncScheduler.enqueueImmediateSync(app)
@@ -568,6 +643,48 @@ fun EmofahAppShell(
         }
     }
 
+    fun useMpesaForSale(event: PendingFinancialEventEntity) {
+        val existing = mpesaAttributionStore.findLink(event)
+        if (existing != null) {
+            financialUiMessage = "M-Pesa payment is already linked (${existing.summary})."
+            return
+        }
+        activeMpesaSaleEvent = event
+        selectedPaymentMethod = PaymentMethod.MPESA
+        salePrefs.saveLastPaymentMethod(PaymentMethod.MPESA)
+        saleFeedback = null
+        isServiceOperationsMode = false
+        navigateTo(EmofahDestination.RecordSale)
+    }
+
+    fun useMpesaForService(event: PendingFinancialEventEntity) {
+        val existing = mpesaAttributionStore.findLink(event)
+        if (existing != null) {
+            financialUiMessage = "M-Pesa payment is already linked (${existing.summary})."
+            return
+        }
+        activeMpesaServiceEvent = event
+        serviceOperationResult = null
+        isServiceOperationsMode = true
+        navigateTo(EmofahDestination.Home)
+    }
+
+    fun dismissMpesaInflow(event: PendingFinancialEventEntity) {
+        val linked = mpesaAttributionStore.tryRecordLink(
+            event = event,
+            target = MpesaInflowLinkTarget.DISMISSED,
+            linkedRecordId = "dismissed",
+            summary = "Not a shop sale or service",
+        )
+        if (activeMpesaSaleEvent?.eventId == event.eventId) activeMpesaSaleEvent = null
+        if (activeMpesaServiceEvent?.eventId == event.eventId) activeMpesaServiceEvent = null
+        financialUiMessage = if (linked) {
+            "M-Pesa payment marked as other / not a sale."
+        } else {
+            "M-Pesa payment was already handled."
+        }
+    }
+
     LaunchedEffect(pendingNotificationRoute) {
         val targetDest = NotificationEvaluator.resolveDestinationRoute(pendingNotificationRoute)
         if (targetDest != null) {
@@ -576,70 +693,111 @@ fun EmofahAppShell(
         }
     }
 
+    val reducedMotion = LocalReducedMotion.current
+    val activeOrdersCount = remember(orderFeedSnapshot.orders) {
+        orderFeedSnapshot.orders.count {
+            it.status == StoreOrderStatus.PENDING || it.status == StoreOrderStatus.CONFIRMED || it.status == StoreOrderStatus.READY
+        }
+    }
+    val attentionSyncCount = pendingSyncCount + conflictCount
+
+    val hasActiveSubMode = when (currentDestination) {
+        EmofahDestination.Home -> isServiceOperationsMode
+        EmofahDestination.Scan -> registerUnknownDraft != null || activeCapture != null
+        EmofahDestination.Stock -> stockRegisterDraft != null || isPhysicalCountingMode || isAdjustingStockMode || isReceivingStockMode
+        EmofahDestination.Money -> isReceiptCaptureMode
+        else -> false
+    }
+
+    BackHandler(enabled = hasActiveSubMode) {
+        when (currentDestination) {
+            EmofahDestination.Home -> if (isServiceOperationsMode) isServiceOperationsMode = false
+            EmofahDestination.Scan -> {
+                if (registerUnknownDraft != null) {
+                    registerUnknownDraft = null
+                    registrationOutcome = null
+                } else if (activeCapture != null) {
+                    activeCapture = null
+                    recognitionOutcome = null
+                    isRecognizing = false
+                    isCheckingCloud = false
+                }
+            }
+            EmofahDestination.Stock -> {
+                when {
+                    stockRegisterDraft != null -> {
+                        stockRegisterDraft = null
+                        registrationOutcome = null
+                    }
+                    isPhysicalCountingMode -> isPhysicalCountingMode = false
+                    isAdjustingStockMode -> isAdjustingStockMode = false
+                    isReceivingStockMode -> isReceivingStockMode = false
+                }
+            }
+            EmofahDestination.Money -> if (isReceiptCaptureMode) isReceiptCaptureMode = false
+            else -> Unit
+        }
+    }
+
+    val colors = MaterialTheme.emofahColors
+
     Scaffold(
+        containerColor = colors.canvas,
         topBar = {
-            TopAppBar(
-                title = { Text(text = "Emofah · ${currentDestination.label}") },
-                actions = {
-                    IconButton(onClick = { showAuthDialog = true }) {
-                        Icon(
-                            imageVector = when (authState.status) {
-                                AuthStatus.AUTHENTICATED -> Icons.Outlined.VerifiedUser
-                                AuthStatus.SESSION_EXPIRED -> Icons.Outlined.WarningAmber
-                                AuthStatus.OFFLINE_CACHED, AuthStatus.UNAUTHENTICATED -> Icons.Outlined.AccountCircle
-                            },
-                            contentDescription = "Staff Account",
-                        )
-                    }
-                    IconButton(onClick = { navigateTo(EmofahDestination.Orders) }) {
-                        Icon(
-                            imageVector = EmofahDestination.Orders.icon,
-                            contentDescription = EmofahDestination.Orders.label,
-                        )
-                    }
-                    IconButton(onClick = { navigateTo(EmofahDestination.Activity) }) {
-                        Icon(
-                            imageVector = EmofahDestination.Activity.icon,
-                            contentDescription = EmofahDestination.Activity.label,
-                        )
-                    }
-                },
+            EmofahTopAppBar(
+                currentDestination = currentDestination,
+                isOnline = isDeviceOnline,
+                authStatus = authState.status,
+                activeOrdersCount = activeOrdersCount,
+                attentionSyncCount = attentionSyncCount,
+                onOpenAuth = { showAuthDialog = true },
+                onOpenOrders = { navigateTo(EmofahDestination.Orders) },
+                onOpenActivity = { navigateTo(EmofahDestination.Activity) },
             )
         },
         bottomBar = {
-            NavigationBar {
-                EmofahDestination.entries
-                    .filter { it.showInBottomBar }
-                    .forEach { dest ->
-                        NavigationBarItem(
-                            selected = currentDestination == dest,
-                            onClick = {
-                                if (dest == EmofahDestination.Home) {
-                                    isServiceOperationsMode = false
-                                }
-                                if (dest == EmofahDestination.Scan) {
-                                    scanPurpose = ScanPurpose.RECORD_SALE
-                                }
-                                if (dest == EmofahDestination.Stock) {
-                                    isReceivingStockMode = false
-                                    stockRegisterDraft = null
-                                }
-                                if (dest == EmofahDestination.Money) {
-                                    isReceiptCaptureMode = false
-                                }
-                                navigateTo(dest)
-                            },
-                            icon = { Icon(imageVector = dest.icon, contentDescription = dest.label) },
-                            label = { Text(text = dest.label) },
-                        )
+            EmofahBottomNavigationBar(
+                currentDestination = currentDestination,
+                onSelectDestination = { dest ->
+                    if (dest == EmofahDestination.Home) {
+                        isServiceOperationsMode = false
                     }
-            }
+                    if (dest == EmofahDestination.Scan) {
+                        scanPurpose = ScanPurpose.RECORD_SALE
+                    }
+                    if (dest == EmofahDestination.Stock) {
+                        isReceivingStockMode = false
+                        isAdjustingStockMode = false
+                        isPhysicalCountingMode = false
+                        stockRegisterDraft = null
+                    }
+                    if (dest == EmofahDestination.Money) {
+                        isReceiptCaptureMode = false
+                    }
+                    navigateTo(dest)
+                },
+            )
         },
     ) { innerPadding ->
+        val transitionDuration = if (reducedMotion) 0 else EmofahMotion.QUICK_MS
         NavHost(
             navController = navController,
             startDestination = EmofahDestination.Home.route,
             modifier = Modifier.padding(innerPadding),
+            enterTransition = {
+                fadeIn(tween(transitionDuration)) +
+                    slideInHorizontally(tween(transitionDuration)) { it / 18 }
+            },
+            exitTransition = {
+                fadeOut(tween(transitionDuration))
+            },
+            popEnterTransition = {
+                fadeIn(tween(transitionDuration)) +
+                    slideInHorizontally(tween(transitionDuration)) { -it / 18 }
+            },
+            popExitTransition = {
+                fadeOut(tween(transitionDuration))
+            },
         ) {
             composable(EmofahDestination.Home.route) {
                 if (isServiceOperationsMode) {
@@ -648,11 +806,34 @@ fun EmofahAppShell(
                         recentServiceEvents = financialEvents.filter { it.source == "ANDROID_SERVICE" },
                         isSubmitting = isSubmittingService,
                         lastResult = serviceOperationResult,
+                        prefilledMpesaAmount = activeMpesaServiceEvent?.amount,
+                        prefilledMpesaRef = activeMpesaServiceEvent?.transactionReference,
+                        prefilledMpesaSender = activeMpesaServiceEvent?.counterparty,
+                        onClearPrefilledMpesa = { activeMpesaServiceEvent = null },
                         onSubmitService = { draft ->
                             if (isSubmittingService) return@ServiceOperationsScreen
                             isSubmittingService = true
+                            val linkedMpesa = activeMpesaServiceEvent
                             scope.launch {
-                                serviceOperationResult = serviceOperationRepository.recordServiceOperation(draft)
+                                val outcome = serviceOperationRepository.recordServiceOperation(draft)
+                                serviceOperationResult = outcome
+                                if (linkedMpesa != null &&
+                                    (outcome is ServiceOperationResult.SuccessOnline ||
+                                        outcome is ServiceOperationResult.SavedOffline)
+                                ) {
+                                    val recId = when (outcome) {
+                                        is ServiceOperationResult.SuccessOnline -> outcome.serverServiceId
+                                        is ServiceOperationResult.SavedOffline -> outcome.clientServiceId
+                                        else -> draft.clientServiceId
+                                    }
+                                    mpesaAttributionStore.tryRecordLink(
+                                        event = linkedMpesa,
+                                        target = MpesaInflowLinkTarget.SERVICE,
+                                        linkedRecordId = recId,
+                                        summary = "${draft.serviceType.label} · Ksh ${draft.effectiveRevenue.toInt()}",
+                                    )
+                                    activeMpesaServiceEvent = null
+                                }
                                 isSubmittingService = false
                             }
                         },
@@ -696,6 +877,10 @@ fun EmofahAppShell(
                         outOfStockCount = stockAlertSummary.outOfStockItems.size,
                         authState = authState,
                         onOpenAuth = { showAuthDialog = true },
+                        unlinkedMpesaInflow = latestUnlinkedMpesaInflow,
+                        onUseMpesaForSale = ::useMpesaForSale,
+                        onUseMpesaForService = ::useMpesaForService,
+                        onDismissMpesaInflow = ::dismissMpesaInflow,
                     )
                 }
             }
@@ -928,6 +1113,8 @@ fun EmofahAppShell(
                     isSubmitting = isSubmittingSale,
                     saleSessionNonce = saleSessionNonce,
                     lastSaleFeedback = saleFeedback,
+                    pendingMpesaEvent = activeMpesaSaleEvent,
+                    onClearPendingMpesa = { activeMpesaSaleEvent = null },
                     onSelectPaymentMethod = { method ->
                         selectedPaymentMethod = method
                         salePrefs.saveLastPaymentMethod(method)
@@ -947,6 +1134,7 @@ fun EmofahAppShell(
                     onRecordSaleClick = { draft ->
                         if (isSubmittingSale) return@RecordSaleScreen
                         isSubmittingSale = true
+                        val linkedMpesa = activeMpesaSaleEvent
                         val originalSellPrice =
                             confirmedSaleProduct?.sellPrice ?: draft.unitSellPrice
                         scope.launch {
@@ -954,6 +1142,27 @@ fun EmofahAppShell(
                                 draft = draft,
                                 originalSellPrice = originalSellPrice,
                             )
+                            var linkedMpesaNote = ""
+                            if (linkedMpesa != null &&
+                                (outcome is RecordSaleOutcome.SuccessOnline ||
+                                    outcome is RecordSaleOutcome.SavedOffline)
+                            ) {
+                                val recId = when (outcome) {
+                                    is RecordSaleOutcome.SuccessOnline -> outcome.serverSaleId.toString()
+                                    is RecordSaleOutcome.SavedOffline -> outcome.clientSaleId
+                                    else -> draft.clientSaleId
+                                }
+                                val linkedOk = mpesaAttributionStore.tryRecordLink(
+                                    event = linkedMpesa,
+                                    target = MpesaInflowLinkTarget.SALE,
+                                    linkedRecordId = recId,
+                                    summary = "${draft.productName} x${draft.quantity}",
+                                )
+                                if (linkedOk) {
+                                    linkedMpesaNote = " Linked to M-Pesa ${linkedMpesa.transactionReference ?: "payment"}."
+                                }
+                                activeMpesaSaleEvent = null
+                            }
                             selectedStockProjection =
                                 app.database.productDao().getStockProjection(draft.productId)
                             val builtReceipt = DigitalReceiptFormatter.buildFromSaleOutcome(
@@ -964,12 +1173,14 @@ fun EmofahAppShell(
                             saleFeedback = when (outcome) {
                                 is RecordSaleOutcome.SuccessOnline -> {
                                     saleSessionNonce += 1
-                                    val replayNote =
-                                        if (outcome.alreadyCommitted) " (idempotent ACK)" else ""
                                     SaleFeedbackUi(
                                         kind = SaleFeedbackKind.ONLINE_CONFIRMED,
-                                        title = "Sale Synced Online$replayNote · #${outcome.serverSaleId}",
-                                        detail = "Ksh ${outcome.totalAmount.toInt()} (${outcome.paymentMethod.label}) recorded in Supabase & Room. Server stock remaining: ${outcome.remainingServerQty}.",
+                                        title = if (outcome.alreadyCommitted) {
+                                            "Sale Already Saved · #${outcome.serverSaleId}"
+                                        } else {
+                                            "Sale Saved Online · #${outcome.serverSaleId}"
+                                        },
+                                        detail = "Ksh ${outcome.totalAmount.toInt()} (${outcome.paymentMethod.label}) saved.$linkedMpesaNote Stock left: ${outcome.remainingServerQty}.",
                                         receipt = builtReceipt,
                                     )
                                 }
@@ -978,8 +1189,8 @@ fun EmofahAppShell(
                                     saleSessionNonce += 1
                                     SaleFeedbackUi(
                                         kind = SaleFeedbackKind.OFFLINE_QUEUED,
-                                        title = "Saved Locally Offline · Pending Sync",
-                                        detail = "Ksh ${outcome.totalAmount.toInt()} (${outcome.paymentMethod.label}) committed to Room. Provisional stock: ${outcome.provisionalRemainingQty}. ${outcome.reason}",
+                                        title = "Saved on Phone · Will Upload Online",
+                                        detail = "Ksh ${outcome.totalAmount.toInt()} (${outcome.paymentMethod.label}) saved on this phone.$linkedMpesaNote Stock left (est.): ${outcome.provisionalRemainingQty}. ${outcome.reason}",
                                         receipt = builtReceipt,
                                     )
                                 }
@@ -988,15 +1199,15 @@ fun EmofahAppShell(
                                     saleSessionNonce += 1
                                     SaleFeedbackUi(
                                         kind = SaleFeedbackKind.ONLINE_CONFIRMED,
-                                        title = "Duplicate Tap Prevented",
-                                        detail = "This sale (${outcome.clientSaleId.take(8)}) is already recorded (${outcome.syncStatus}).",
+                                        title = "Already Recorded",
+                                        detail = "This sale (${outcome.clientSaleId.take(8)}) is already saved (${outcome.syncStatus}).",
                                     )
                                 }
 
                                 is RecordSaleOutcome.Rejected -> {
                                     SaleFeedbackUi(
                                         kind = SaleFeedbackKind.REJECTED,
-                                        title = "Sale Not Recorded",
+                                        title = "Sale Not Saved",
                                         detail = outcome.message,
                                     )
                                 }
@@ -1020,7 +1231,7 @@ fun EmofahAppShell(
                         existingProducts = cachedProducts,
                         isSubmitting = isRegisteringProduct,
                         lastOutcome = registrationOutcome,
-                        headerSubtitle = "Register a new SKU directly in Stock Operations. Opening stock updates shared inventory and queues offline if disconnected.",
+                        headerSubtitle = "Add a new shop item. Opening stock updates shared shop inventory and saves on this phone if offline.",
                         backButtonLabel = "Back to Stock Lookup",
                         primarySuccessLabelBuilder = { prod -> "Open ${prod.name} in Stock Lookup" },
                         secondarySuccessLabelBuilder = { _ -> "Receive Additional Units" },
@@ -1293,15 +1504,19 @@ fun EmofahAppShell(
                         financialEvents = financialEvents,
                         statusMessage = financialUiMessage,
                         isSyncing = isManualSyncing,
+                        mpesaInflowLinks = mpesaLinks,
+                        onUseMpesaForSale = ::useMpesaForSale,
+                        onUseMpesaForService = ::useMpesaForService,
+                        onDismissMpesaInflow = ::dismissMpesaInflow,
                         onGrantConsent = {
                             financialMonitoringState = financialMonitoringPrefs.grantConsent(
                                 actorId = identityProvider.getActorId()
                             )
-                            financialUiMessage = "M-Pesa SMS monitoring consent saved."
+                            financialUiMessage = "M-Pesa message reading turned on."
                         },
                         onRevokeConsent = {
                             financialMonitoringState = financialMonitoringPrefs.revokeConsent()
-                            financialUiMessage = "M-Pesa SMS monitoring paused."
+                            financialUiMessage = "M-Pesa message reading turned off."
                         },
                         onPermissionResult = {
                             financialMonitoringState = financialMonitoringPrefs.readState()
@@ -1318,14 +1533,20 @@ fun EmofahAppShell(
                                 )
                                 financialMonitoringState = financialMonitoringPrefs.readState()
                                 financialUiMessage = when (outcome) {
-                                    is MpesaCaptureOutcome.Captured ->
-                                        "Captured ${outcome.event.direction} Ksh ${outcome.event.amount.toInt()} (${outcome.event.transactionReference ?: "M-Pesa"}) · Queued for Supabase sync."
+                                    is MpesaCaptureOutcome.Captured -> {
+                                        val evt = outcome.event
+                                        if (MpesaInflowAttributionPolicy.isMpesaInflowEvent(evt)) {
+                                            "M-Pesa Received: Ksh ${evt.amount.toInt()} (${evt.transactionReference ?: "M-Pesa"}) saved. Choose Sale or Service below."
+                                        } else {
+                                            "Saved M-Pesa ${evt.direction} Ksh ${evt.amount.toInt()} (${evt.transactionReference ?: "M-Pesa"})."
+                                        }
+                                    }
                                     is MpesaCaptureOutcome.DuplicateIgnored ->
-                                        "Duplicate ignored: ${outcome.referenceCode} is already captured."
+                                        "Already saved: ${outcome.referenceCode} is already in your list."
                                     is MpesaCaptureOutcome.IgnoredNonFinancial ->
-                                        "Ignored: ${outcome.reason}"
+                                        "Not saved: ${outcome.reason}"
                                     MpesaCaptureOutcome.ConsentNotGranted ->
-                                        "Consent required before capturing SMS."
+                                        "Turn on M-Pesa reading first."
                                 }
                             }
                         },
@@ -1339,7 +1560,7 @@ fun EmofahAppShell(
                                 )
                                 financialUiMessage = when (outcome) {
                                     is ManualFinancialOutcome.SavedLocally ->
-                                        "Saved ${outcome.event.direction} Ksh ${outcome.event.amount.toInt()} · Queued for Supabase & Desktop rules."
+                                        "Saved Ksh ${outcome.event.amount.toInt()} (${outcome.event.direction}). Will sync online automatically."
                                     is ManualFinancialOutcome.Rejected ->
                                         outcome.message
                                 }
@@ -1353,10 +1574,10 @@ fun EmofahAppShell(
                                 syncTelemetry.recordAttempt(System.currentTimeMillis(), result)
                                 syncCheckpoint = syncTelemetry.readCheckpoint()
                                 financialUiMessage = when {
-                                    result.skippedOffline -> "Offline — queued financial events will sync automatically once online."
-                                    result.syncedCount > 0 -> "Synced ${result.syncedCount} queued event(s) to Supabase."
-                                    result.conflictCount > 0 -> "Sync finished with ${result.conflictCount} conflict(s). Check Activity tab."
-                                    else -> syncCheckpoint.lastMessage ?: "Sync check complete."
+                                    result.skippedOffline -> "No internet — saved records will upload automatically once online."
+                                    result.syncedCount > 0 -> "Uploaded ${result.syncedCount} saved record(s)."
+                                    result.conflictCount > 0 -> "Sync finished with ${result.conflictCount} issue(s). Check Activity tab."
+                                    else -> syncCheckpoint.lastMessage ?: "Everything is up to date."
                                 }
                                 isManualSyncing = false
                             }
@@ -1410,7 +1631,7 @@ fun EmofahAppShell(
                                     orderActionMessage = res.message
                                 }
                             }
-                            orderFeedSnapshot = orderRepository.readCachedSnapshotImmediate(
+                            orderFeedSnapshot = orderRepository.readCachedSnapshotAsync(
                                 catalogueProducts = cachedProducts,
                                 reason = orderFeedSnapshot.statusMessage,
                             )
@@ -1435,7 +1656,7 @@ fun EmofahAppShell(
                                     orderActionMessage = res.message
                                 }
                             }
-                            orderFeedSnapshot = orderRepository.readCachedSnapshotImmediate(
+                            orderFeedSnapshot = orderRepository.readCachedSnapshotAsync(
                                 catalogueProducts = cachedProducts,
                                 reason = orderFeedSnapshot.statusMessage,
                             )
@@ -1562,7 +1783,7 @@ fun EmofahAppShell(
                                     EmofahNotificationManager.notifyNewOrdersIfNeeded(app, refreshed.orders)
                                 }
                             } else {
-                                orderFeedSnapshot = orderRepository.readCachedSnapshotImmediate(
+                                orderFeedSnapshot = orderRepository.readCachedSnapshotAsync(
                                     catalogueProducts = cachedProducts,
                                     reason = orderFeedSnapshot.statusMessage,
                                 )
@@ -1661,11 +1882,19 @@ fun EmofahAppShell(
             isOnline = isDeviceOnline,
             authBlockedSyncCount = offlineSummary.authBlockedCount,
             onDismiss = { showAuthDialog = false },
-            onSubmitSignIn = { email, password ->
+            onRequestOtp = { email, onSent ->
                 scope.launch {
-                    val outcome = authRepository.signIn(email, password)
+                    val result = authRepository.requestOtp(email)
+                    onSent(result is AuthOtpResult.OtpSent)
+                }
+            },
+            onVerifyOtp = { email, token ->
+                scope.launch {
+                    val outcome = authRepository.verifyOtp(email, token)
                     if (outcome is AuthActionOutcome.SignedIn) {
-                        showAuthDialog = false
+                        if (!authRepository.uiState.value.bootstrapNeeded) {
+                            showAuthDialog = false
+                        }
                         syncUiMessage = "Signed in as ${outcome.session.email} (${outcome.session.staffRole.label})."
                     }
                 }
@@ -1674,7 +1903,7 @@ fun EmofahAppShell(
                 scope.launch {
                     val outcome = authRepository.ensureFreshSessionIfOnline(forceRefresh = true)
                     if (outcome is AuthActionOutcome.Refreshed) {
-                        syncUiMessage = "Session token refreshed for ${outcome.session.email}."
+                        syncUiMessage = "Session refreshed for ${outcome.session.email}."
                     }
                 }
             },
@@ -1683,12 +1912,279 @@ fun EmofahAppShell(
                     val res = authRepository.signOut()
                     showAuthDialog = false
                     syncUiMessage = if (res.hadPendingSyncItems) {
-                        "Signed out. Offline queued records remain safe locally."
+                        "Signed out. Saved offline records remain safe on this phone."
                     } else {
                         "Signed out."
                     }
                 }
             },
+            onBootstrapInitialAdmin = {
+                scope.launch {
+                    val outcome = authRepository.bootstrapInitialAdmin()
+                    if (outcome is AuthBootstrapOutcome.Activated) {
+                        syncUiMessage = outcome.message
+                    }
+                }
+            },
+            onLoadStaffDirectory = { onLoaded ->
+                scope.launch {
+                    onLoaded(authRepository.listStaffRoles())
+                }
+            },
+            onAssignStaffRole = { email, role, isActive, onDone ->
+                scope.launch {
+                    onDone(authRepository.assignStaffRole(email, role, isActive))
+                }
+            },
         )
     }
 }
+
+@Composable
+private fun EmofahTopAppBar(
+    currentDestination: EmofahDestination,
+    isOnline: Boolean,
+    authStatus: AuthStatus,
+    activeOrdersCount: Int,
+    attentionSyncCount: Int,
+    onOpenAuth: () -> Unit,
+    onOpenOrders: () -> Unit,
+    onOpenActivity: () -> Unit,
+) {
+    val colors = MaterialTheme.emofahColors
+    Surface(
+        color = colors.glassSurface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                        modifier = Modifier.size(34.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = "E",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "Emofah",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary,
+                                maxLines = 1,
+                            )
+                            EmofahStatusBadge(
+                                text = if (isOnline) "Online" else "Offline",
+                                tone = if (isOnline) EmofahBadgeTone.SUCCESS else EmofahBadgeTone.WARNING,
+                                leadingDot = true,
+                            )
+                        }
+                        Text(
+                            text = currentDestination.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    IconButton(onClick = onOpenAuth) {
+                        Icon(
+                            imageVector = when (authStatus) {
+                                AuthStatus.AUTHENTICATED -> Icons.Outlined.VerifiedUser
+                                AuthStatus.SESSION_EXPIRED -> Icons.Outlined.WarningAmber
+                                AuthStatus.OFFLINE_CACHED, AuthStatus.UNAUTHENTICATED -> Icons.Outlined.AccountCircle
+                            },
+                            contentDescription = "Staff Account",
+                            tint = when (authStatus) {
+                                AuthStatus.AUTHENTICATED -> colors.success
+                                AuthStatus.SESSION_EXPIRED -> colors.danger
+                                AuthStatus.OFFLINE_CACHED -> colors.warning
+                                AuthStatus.UNAUTHENTICATED -> colors.textMuted
+                            },
+                        )
+                    }
+
+                    IconButton(onClick = onOpenOrders) {
+                        if (activeOrdersCount > 0) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    ) {
+                                        Text(if (activeOrdersCount > 9) "9+" else "$activeOrdersCount")
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = EmofahDestination.Orders.icon,
+                                    contentDescription = EmofahDestination.Orders.label,
+                                    tint = if (currentDestination == EmofahDestination.Orders) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        colors.textPrimary
+                                    },
+                                )
+                            }
+                        } else {
+                            Icon(
+                                imageVector = EmofahDestination.Orders.icon,
+                                contentDescription = EmofahDestination.Orders.label,
+                                tint = if (currentDestination == EmofahDestination.Orders) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    colors.textPrimary
+                                },
+                            )
+                        }
+                    }
+
+                    IconButton(onClick = onOpenActivity) {
+                        if (attentionSyncCount > 0) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = if (attentionSyncCount > 0) colors.warning else MaterialTheme.colorScheme.primary,
+                                        contentColor = colors.canvas,
+                                    ) {
+                                        Text(if (attentionSyncCount > 9) "9+" else "$attentionSyncCount")
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = EmofahDestination.Activity.icon,
+                                    contentDescription = EmofahDestination.Activity.label,
+                                    tint = if (currentDestination == EmofahDestination.Activity) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        colors.textPrimary
+                                    },
+                                )
+                            }
+                        } else {
+                            Icon(
+                                imageVector = EmofahDestination.Activity.icon,
+                                contentDescription = EmofahDestination.Activity.label,
+                                tint = if (currentDestination == EmofahDestination.Activity) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    colors.textPrimary
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = colors.borderSubtle)
+        }
+    }
+}
+
+@Composable
+private fun EmofahBottomNavigationBar(
+    currentDestination: EmofahDestination,
+    onSelectDestination: (EmofahDestination) -> Unit,
+) {
+    val colors = MaterialTheme.emofahColors
+    val navItems = remember { EmofahDestination.entries.filter { it.showInBottomBar } }
+
+    Surface(
+        color = colors.glassSurface,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            HorizontalDivider(thickness = 1.dp, color = colors.borderSubtle)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                navItems.forEach { dest ->
+                    val isSelected = currentDestination == dest
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val itemBg = if (isSelected) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                    } else {
+                        androidx.compose.ui.graphics.Color.Transparent
+                    }
+                    val contentTint = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        colors.textMuted
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 2.dp)
+                            .emofahPressScale(interactionSource, pressedScale = 0.94f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(itemBg)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = ripple(),
+                                onClick = { onSelectDestination(dest) },
+                            )
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Icon(
+                                imageVector = dest.icon,
+                                contentDescription = dest.label,
+                                tint = contentTint,
+                                modifier = Modifier.size(21.dp),
+                            )
+                            Text(
+                                text = dest.label,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                color = contentTint,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

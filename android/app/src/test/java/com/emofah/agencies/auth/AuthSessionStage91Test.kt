@@ -151,4 +151,13 @@ class AuthSessionStage91Test {
         activeJwt = null
         assertEquals(SupabaseConfig.anonKey, SupabaseConfig.bearerToken())
     }
+
+    @Test
+    fun mapRoleFromClaims_ignoresEmailSubstringsAndRequiresServerClaims() {
+        assertEquals(StaffRole.CASHIER, AuthSessionPolicy.mapRoleFromClaims(null, "admin@gmail.com"))
+        assertEquals(StaffRole.CASHIER, AuthSessionPolicy.mapRoleFromClaims(null, "owner.manager@emofah.co.ke"))
+        assertEquals(StaffRole.CASHIER, AuthSessionPolicy.mapRoleFromClaims("", "supervisor@emofah.co.ke"))
+        assertEquals(StaffRole.SUPERVISOR, AuthSessionPolicy.mapRoleFromClaims("supervisor", "staff@emofah.co.ke"))
+        assertEquals(StaffRole.OWNER_MANAGER, AuthSessionPolicy.mapRoleFromClaims("owner_manager", "staff@emofah.co.ke"))
+    }
 }

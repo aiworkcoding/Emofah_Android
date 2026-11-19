@@ -7,11 +7,13 @@ import com.emofah.agencies.data.local.entities.SyncState
 import com.emofah.agencies.sales.ConnectivityChecker
 import com.emofah.agencies.sales.DeviceIdentityProvider
 import com.emofah.agencies.sales.StaffRole
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 
@@ -31,12 +33,16 @@ class AuthSessionRepository(
     private val onAuthenticationRestored: suspend () -> Unit = {},
 ) {
     private val refreshMutex = Mutex()
+    @Volatile
+    private var serverBootstrapNeeded: Boolean = false
     private val _uiState = MutableStateFlow(evaluateCurrentUiState())
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
 
-    fun registerAsGlobalTokenProvider() {
+    fun registerAsGlobalTokenProvider(refreshImmediately: Boolean = true) {
         SupabaseConfig.registerAccessTokenProvider { currentBearerAccessTokenOrNull() }
-        refreshUiStateFromStore()
+        if (refreshImmediately) {
+            refreshUiStateFromStore()
+        }
     }
 
     fun currentBearerAccessTokenOrNull(): String? {
@@ -52,17 +58,41 @@ class AuthSessionRepository(
         return state
     }
 
-    suspend fun signIn(emailInput: String, passwordInput: String): AuthActionOutcome {
+    suspend fun refreshUiStateFromStoreAsync(): AuthUiState = withContext(Dispatchers.IO) {
+        refreshUiStateFromStore()
+    }
+
+    suspend fun requestOtp(emailInput: String): AuthOtpResult = withContext(Dispatchers.IO) {
         val email = emailInput.trim()
         if (email.isBlank() || !email.contains("@")) {
-            return AuthActionOutcome.Rejected("Enter a valid staff email address.")
-        }
-        if (passwordInput.isEmpty()) {
-            return AuthActionOutcome.Rejected("Enter your password.")
+            return@withContext AuthOtpResult.AuthRejected("INVALID_EMAIL", "Enter a valid staff email address.")
         }
 
         _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
-        return when (val rpc = authGateway.signInWithPassword(email, passwordInput)) {
+        val result = authGateway.requestOtp(email)
+        _uiState.value = _uiState.value.copy(
+            isBusy = false,
+            lastError = when (result) {
+                is AuthOtpResult.OtpSent -> null
+                is AuthOtpResult.AuthRejected -> result.message
+                is AuthOtpResult.TransientError -> result.message
+            }
+        )
+        result
+    }
+
+    suspend fun verifyOtp(emailInput: String, tokenInput: String): AuthActionOutcome = withContext(Dispatchers.IO) {
+        val email = emailInput.trim()
+        val token = tokenInput.trim()
+        if (email.isBlank() || !email.contains("@")) {
+            return@withContext AuthActionOutcome.Rejected("Enter a valid staff email address.")
+        }
+        if (token.isBlank() || token.length < 4) {
+            return@withContext AuthActionOutcome.Rejected("Enter the 6-digit verification code received by email.")
+        }
+
+        _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
+        return@withContext when (val rpc = authGateway.verifyOtp(email, token)) {
             is AuthRpcResult.Success -> {
                 when (val reconciled = reconcileServerProfile(rpc.session)) {
                     is ServerProfileReconciliation.Deactivated -> {
@@ -98,7 +128,7 @@ class AuthSessionRepository(
                         appendAuthAudit(
                             operation = "AUTH_SIGN_IN",
                             actorId = nextState.activeActorId,
-                            reason = "Signed in as ${effectiveSession.email} (${effectiveSession.staffRole.name})",
+                            reason = "Signed in via email OTP as ${effectiveSession.email} (${effectiveSession.staffRole.name})",
                             afterJson = JSONObject().apply {
                                 put("user_id", effectiveSession.userId)
                                 put("email", effectiveSession.email)
@@ -129,7 +159,7 @@ class AuthSessionRepository(
         }
     }
 
-    suspend fun ensureFreshSessionIfOnline(forceRefresh: Boolean = false): AuthActionOutcome? {
+    suspend fun ensureFreshSessionIfOnline(forceRefresh: Boolean = false): AuthActionOutcome? = withContext(Dispatchers.IO) {
         return refreshMutex.withLock {
             val stored = sessionStore.readSession() ?: run {
                 _uiState.value = evaluateCurrentUiState()
@@ -245,11 +275,110 @@ class AuthSessionRepository(
 
     private suspend fun reconcileServerProfile(session: AuthUserSession): ServerProfileReconciliation {
         val profile = runCatching { authGateway.fetchStaffProfile(session.accessToken) }.getOrNull()
+        serverBootstrapNeeded = profile?.bootstrapNeeded == true
         return RolePermissionPolicy.reconcileSessionWithServerProfile(session, profile)
     }
 
-    suspend fun handleServerAuthRejected(reason: String) {
-        val stored = sessionStore.readSession() ?: return
+    suspend fun bootstrapInitialAdmin(): AuthBootstrapOutcome = withContext(Dispatchers.IO) {
+        val currentSession = sessionStore.readSession()
+            ?: return@withContext AuthBootstrapOutcome.Rejected("Sign in with your email code first.")
+        if (!connectivityChecker.isOnline()) {
+            return@withContext AuthBootstrapOutcome.TransientError("Connect to the internet to activate Owner access.")
+        }
+        _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
+        val outcome = authGateway.bootstrapInitialAdmin(
+            accessToken = currentSession.accessToken,
+            email = currentSession.email,
+            fullName = currentSession.displayName,
+        )
+        when (outcome) {
+            is AuthBootstrapOutcome.Activated -> {
+                serverBootstrapNeeded = false
+                val refreshedProfile = runCatching { authGateway.fetchStaffProfile(currentSession.accessToken) }.getOrNull()
+                val upgradedSession = if (refreshedProfile != null && refreshedProfile.authenticated) {
+                    currentSession.copy(
+                        staffRole = refreshedProfile.staffRole,
+                        displayName = refreshedProfile.fullName?.takeIf { it.isNotBlank() } ?: currentSession.displayName,
+                        rawRoleClaim = refreshedProfile.staffRole.name,
+                    )
+                } else {
+                    currentSession.copy(
+                        staffRole = StaffRole.OWNER_MANAGER,
+                        rawRoleClaim = StaffRole.OWNER_MANAGER.name,
+                    )
+                }
+                sessionStore.saveSession(upgradedSession)
+                val nextState = evaluateCurrentUiState()
+                _uiState.value = nextState
+                syncIdentityFromState(nextState)
+                appendAuthAudit(
+                    operation = "INITIAL_ADMIN_BOOTSTRAPPED",
+                    actorId = nextState.activeActorId,
+                    reason = outcome.message,
+                    afterJson = JSONObject().apply {
+                        put("email", upgradedSession.email)
+                        put("staff_role", upgradedSession.staffRole.name)
+                    }.toString(),
+                )
+            }
+            is AuthBootstrapOutcome.Rejected -> {
+                val profile = runCatching { authGateway.fetchStaffProfile(currentSession.accessToken) }.getOrNull()
+                if (profile != null) {
+                    serverBootstrapNeeded = profile.bootstrapNeeded
+                }
+                _uiState.value = evaluateCurrentUiState().copy(
+                    isBusy = false,
+                    lastError = outcome.message,
+                )
+            }
+            is AuthBootstrapOutcome.TransientError -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = outcome.message)
+            }
+        }
+        return@withContext outcome
+    }
+
+    suspend fun listStaffRoles(): StaffDirectoryOutcome = withContext(Dispatchers.IO) {
+        val currentSession = sessionStore.readSession()
+            ?: return@withContext StaffDirectoryOutcome.Rejected("Sign in first.")
+        if (!connectivityChecker.isOnline()) {
+            return@withContext StaffDirectoryOutcome.TransientError("Connect to the internet to load staff roles.")
+        }
+        authGateway.listStaffRoles(currentSession.accessToken)
+    }
+
+    suspend fun assignStaffRole(
+        email: String,
+        staffRole: StaffRole,
+        isActive: Boolean = true,
+    ): RoleUpdateOutcome = withContext(Dispatchers.IO) {
+        val currentSession = sessionStore.readSession()
+            ?: return@withContext RoleUpdateOutcome.Rejected("Sign in first.")
+        if (!connectivityChecker.isOnline()) {
+            return@withContext RoleUpdateOutcome.TransientError("Connect to the internet to update staff roles.")
+        }
+        val outcome = authGateway.assignStaffRole(
+            accessToken = currentSession.accessToken,
+            email = email,
+            staffRole = staffRole,
+            isActive = isActive,
+        )
+        if (outcome is RoleUpdateOutcome.Updated &&
+            email.trim().equals(currentSession.email.trim(), ignoreCase = true)
+        ) {
+            val reconciled = reconcileServerProfile(currentSession)
+            if (reconciled is ServerProfileReconciliation.Active) {
+                sessionStore.saveSession(reconciled.session)
+                val nextState = evaluateCurrentUiState()
+                _uiState.value = nextState
+                syncIdentityFromState(nextState)
+            }
+        }
+        outcome
+    }
+
+    suspend fun handleServerAuthRejected(reason: String) = withContext(Dispatchers.IO) {
+        val stored = sessionStore.readSession() ?: return@withContext
         sessionStore.markSessionExpired(reason)
         val expiredState = evaluateCurrentUiState()
         _uiState.value = expiredState
@@ -261,7 +390,7 @@ class AuthSessionRepository(
         )
     }
 
-    suspend fun signOut(): AuthActionOutcome.SignedOut {
+    suspend fun signOut(): AuthActionOutcome.SignedOut = withContext(Dispatchers.IO) {
         val currentSession = sessionStore.readSession()
         val pendingCount = runCatching {
             database.syncQueueDao().getAllEventsSnapshot()
@@ -276,6 +405,7 @@ class AuthSessionRepository(
             AuthSessionPolicy.buildActorId(it.userId, it.email, it.displayName)
         } ?: identityProvider.getActorId()
 
+        serverBootstrapNeeded = false
         sessionStore.clearSession()
         identityProvider.setAuthenticatedActorId(null)
         identityProvider.setStaffRole(StaffRole.CASHIER)
@@ -286,6 +416,7 @@ class AuthSessionRepository(
             lastError = null,
             isBusy = false,
             needsReauthPrompt = false,
+            bootstrapNeeded = false,
         )
 
         appendAuthAudit(
@@ -298,7 +429,7 @@ class AuthSessionRepository(
             }.toString(),
         )
 
-        return AuthActionOutcome.SignedOut(hadPendingSyncItems = pendingCount > 0)
+        return@withContext AuthActionOutcome.SignedOut(hadPendingSyncItems = pendingCount > 0)
     }
 
     private fun evaluateCurrentUiState(nowEpochMs: Long = clockEpochMs()): AuthUiState {
@@ -317,6 +448,7 @@ class AuthSessionRepository(
             lastError = sessionStore.readLastError(),
             isBusy = false,
             needsReauthPrompt = status == AuthStatus.SESSION_EXPIRED,
+            bootstrapNeeded = stored != null && !expiredFlag && serverBootstrapNeeded,
         )
     }
 

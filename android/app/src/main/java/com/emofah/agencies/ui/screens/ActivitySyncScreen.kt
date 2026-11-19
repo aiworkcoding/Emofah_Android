@@ -6,17 +6,20 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -33,14 +36,11 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -81,17 +81,23 @@ import com.emofah.agencies.sales.SaleHistoryRecordUi
 import com.emofah.agencies.sales.SaleHistorySyncBadge
 import com.emofah.agencies.sales.SaleReversalPolicy
 import com.emofah.agencies.sales.StaffRole
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahCard
+import com.emofah.agencies.ui.components.EmofahEmptyState
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahInteractiveCard
+import com.emofah.agencies.ui.components.EmofahLoadingButton
+import com.emofah.agencies.ui.components.EmofahMetricTile
+import com.emofah.agencies.ui.components.EmofahSectionHeader
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
+import com.emofah.agencies.ui.theme.tabular
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/**
- * Stage 2.4 + Stage 3.6 — Sales Activity, Safe Corrections & Offline Sync Screen.
- * Displays today's recorded sales (with detail drill-down & authorised safe reversals),
- * live connectivity, pending sync queue, and conflict resolution actions.
- */
 @Composable
 fun ActivitySyncScreen(
     todaySales: List<SaleHistoryRecordUi>,
@@ -126,11 +132,16 @@ fun ActivitySyncScreen(
     onRunRecoveryCleanup: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val colors = MaterialTheme.emofahColors
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var inspectedSaleClientId by remember { mutableStateOf<String?>(null) }
     var showReversalForm by remember { mutableStateOf(false) }
     var reversalReasonInput by remember { mutableStateOf("") }
     var previewedReceipt by remember { mutableStateOf<DigitalReceiptData?>(null) }
+    var auditViewState by remember { mutableStateOf(AuditTrailViewState()) }
+
+    val checkpointFormat = remember { SimpleDateFormat("dd MMM · HH:mm", Locale.getDefault()) }
+    val queueTimeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 
     val allMappedSales = remember(todaySales, earlierSales) { todaySales + earlierSales }
     val inspectedRecord = remember(inspectedSaleClientId, allMappedSales) {
@@ -148,31 +159,29 @@ fun ActivitySyncScreen(
     val todayActiveTotal = remember(activeTodaySales) {
         activeTodaySales.sumOf { it.totalAmount }
     }
+    val queueAttentionCount = summary.pendingCount + summary.conflictCount + summary.authBlockedCount
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Connectivity & Sync Health Header
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (summary.conflictCount > 0 || summary.authBlockedCount > 0) {
-                    MaterialTheme.colorScheme.errorContainer
-                } else if (summary.isOnline) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.tertiaryContainer
-                },
-            ),
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+        item(key = "activity_health_header") {
+            val hasAttention = summary.conflictCount > 0 || summary.authBlockedCount > 0
+            val containerColor = when {
+                hasAttention -> colors.dangerContainer
+                summary.isOnline -> colors.successContainer
+                else -> colors.warningContainer
+            }
+            val accentColor = when {
+                hasAttention -> colors.danger
+                summary.isOnline -> colors.success
+                else -> colors.warning
+            }
+
+            EmofahCard(
+                containerColor = containerColor,
+                borderColor = accentColor.copy(alpha = 0.28f),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -187,22 +196,27 @@ fun ActivitySyncScreen(
                         Icon(
                             imageVector = if (summary.isOnline) Icons.Outlined.CloudDone else Icons.Outlined.CloudOff,
                             contentDescription = null,
+                            tint = accentColor,
                         )
                         Column {
                             Text(
                                 text = if (summary.isOnline) "Connected" else "Offline Mode",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary,
                             )
                             Text(
                                 text = summary.statusHeadline,
                                 style = MaterialTheme.typography.bodySmall,
+                                color = colors.textPrimary,
                             )
                         }
                     }
                     OutlinedButton(
                         onClick = onSyncNow,
                         enabled = !isSyncing,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f)),
                     ) {
                         Icon(Icons.Outlined.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
@@ -211,10 +225,11 @@ fun ActivitySyncScreen(
                 }
 
                 checkpoint.lastSuccessEpochMs?.let { ts ->
-                    val formatted = SimpleDateFormat("dd MMM · HH:mm", Locale.getDefault()).format(Date(ts))
+                    val formatted = remember(ts) { checkpointFormat.format(Date(ts)) }
                     Text(
                         text = "Last successful sync: $formatted",
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = colors.textMuted,
                     )
                 }
 
@@ -222,248 +237,228 @@ fun ActivitySyncScreen(
                     Text(
                         text = msg,
                         style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted,
                     )
                 }
             }
         }
 
         lastActionMessage?.let { msg ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-            ) {
-                Text(
-                    text = msg,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(12.dp),
+            item(key = "activity_last_action") {
+                EmofahFeedbackBanner(
+                    title = "Activity Update",
+                    message = msg,
+                    tone = EmofahBadgeTone.INFO,
                 )
             }
         }
 
-        // Quick conflict alert banner when viewing Sales tab
         if (selectedTabIndex == 0 && (summary.conflictCount > 0 || summary.authBlockedCount > 0)) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { selectedTabIndex = 1 },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                    Text(
-                        text = "${summary.conflictCount + summary.authBlockedCount} sync item(s) need attention. Tap to inspect Sync Queue.",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
+            item(key = "activity_conflict_alert") {
+                EmofahFeedbackBanner(
+                    title = "${summary.conflictCount + summary.authBlockedCount} Sync Item(s) Need Attention",
+                    message = "Open the Queue tab to review conflicts or sign-in holds.",
+                    tone = EmofahBadgeTone.DANGER,
+                    actionLabel = "Open Queue",
+                    onAction = { selectedTabIndex = 1 },
+                )
             }
         }
 
-        // Section Switcher: Sales vs Sync Queue vs Audit Log
-        val queueAttentionCount = summary.pendingCount + summary.conflictCount + summary.authBlockedCount
-        TabRow(selectedTabIndex = selectedTabIndex) {
-            Tab(
-                selected = selectedTabIndex == 0,
-                onClick = { selectedTabIndex = 0 },
-                text = { Text("Sales (${todaySales.size})", maxLines = 1) },
-            )
-            Tab(
-                selected = selectedTabIndex == 1,
-                onClick = { selectedTabIndex = 1 },
-                text = {
-                    val suffix = if (queueAttentionCount > 0) " ($queueAttentionCount)" else ""
-                    Text("Queue$suffix", maxLines = 1)
-                },
-            )
-            Tab(
-                selected = selectedTabIndex == 2,
-                onClick = { selectedTabIndex = 2 },
-                text = {
-                    val suffix = if (pendingAuditCount > 0) " ($pendingAuditCount)" else ""
-                    Text("Audit$suffix", maxLines = 1)
-                },
-            )
+        item(key = "activity_tabs") {
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                containerColor = colors.surfaceCard,
+            ) {
+                Tab(
+                    selected = selectedTabIndex == 0,
+                    onClick = { selectedTabIndex = 0 },
+                    text = { Text("Sales (${todaySales.size})", maxLines = 1) },
+                )
+                Tab(
+                    selected = selectedTabIndex == 1,
+                    onClick = { selectedTabIndex = 1 },
+                    text = {
+                        val suffix = if (queueAttentionCount > 0) " ($queueAttentionCount)" else ""
+                        Text("Queue$suffix", maxLines = 1)
+                    },
+                )
+                Tab(
+                    selected = selectedTabIndex == 2,
+                    onClick = { selectedTabIndex = 2 },
+                    text = {
+                        val suffix = if (pendingAuditCount > 0) " ($pendingAuditCount)" else ""
+                        Text("Audit$suffix", maxLines = 1)
+                    },
+                )
+            }
         }
 
-        if (selectedTabIndex == 0) {
-            dailySummary?.let { daily ->
-                DailyOperationalSummaryCard(summary = daily)
-            }
-
-            // Today's Sales Summary Strip
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                QueueCountCard("Today Active", activeTodaySales.size, Modifier.weight(1f))
-                QueueCountCard("Net Ksh", todayActiveTotal.roundToInt(), Modifier.weight(1f))
-                QueueCountCard("Reversed", reversedTodayCount, Modifier.weight(1f))
-            }
-
-            Text(
-                text = "Today's Recorded Sales",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-
-            if (todaySales.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.ReceiptLong,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "No sales recorded today yet. Tap Scan or Record Sale to capture transactions.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+        when (selectedTabIndex) {
+            0 -> {
+                dailySummary?.let { daily ->
+                    item(key = "daily_summary_card") {
+                        DailyOperationalSummaryCard(summary = daily)
                     }
                 }
-            } else {
-                todaySales.forEach { record ->
-                    SaleHistoryCard(
-                        record = record,
-                        onOpenDetails = {
-                            inspectedSaleClientId = record.saleWithItems.sale.clientSaleId
-                            showReversalForm = false
-                            reversalReasonInput = ""
-                        },
-                    )
-                }
-            }
 
-            if (earlierSales.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "Earlier Sales (${earlierSales.size})",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                earlierSales.take(25).forEach { record ->
-                    SaleHistoryCard(
-                        record = record,
-                        onOpenDetails = {
-                            inspectedSaleClientId = record.saleWithItems.sale.clientSaleId
-                            showReversalForm = false
-                            reversalReasonInput = ""
-                        },
-                    )
-                }
-            }
-        } else if (selectedTabIndex == 1) {
-            // Queue Counters Grid
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                QueueCountCard("Pending", summary.pendingCount, Modifier.weight(1f))
-                QueueCountCard("Conflicts", summary.conflictCount, Modifier.weight(1f))
-                QueueCountCard("Synced", summary.syncedCount, Modifier.weight(1f))
-            }
-
-            // Full-width Manual Sync Trigger inside Queue tab
-            Button(
-                onClick = onSyncNow,
-                enabled = !isSyncing,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-            ) {
-                Icon(Icons.Outlined.Sync, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = if (isSyncing) "Syncing Queue..." else "Sync Pending Items Now",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            if (summary.authBlockedCount > 0 || authState.status == AuthStatus.SESSION_EXPIRED) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
+                item(key = "today_sales_metrics") {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Authentication Hold (${summary.authBlockedCount} item(s))",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                            )
-                            Text(
-                                text = "Sign in again to resume syncing paused records.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                            )
-                        }
-                        Button(onClick = onOpenAuthDialog) {
-                            Text("Sign In")
-                        }
-                    }
-                }
-            }
-
-            // Conflicts Requiring Safe Review (Stage 3.5 integration)
-            if (summary.conflictEvents.isNotEmpty()) {
-                Text(
-                    text = "Conflicts Requiring Review",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                summary.conflictEvents.forEach { conflict ->
-                    val category = ConflictPolicy.classifyQueueConflict(conflict)
-                    Card(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        shape = RoundedCornerShape(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        EmofahMetricTile("Today Active", activeTodaySales.size.toString(), Modifier.weight(1f))
+                        EmofahMetricTile(
+                            label = "Net Ksh",
+                            value = todayActiveTotal.roundToInt().toString(),
+                            modifier = Modifier.weight(1f),
+                            tone = EmofahBadgeTone.INFO,
+                        )
+                        EmofahMetricTile(
+                            label = "Reversed",
+                            value = reversedTodayCount.toString(),
+                            modifier = Modifier.weight(1f),
+                            tone = if (reversedTodayCount > 0) EmofahBadgeTone.WARNING else EmofahBadgeTone.NEUTRAL,
+                        )
+                    }
+                }
+
+                item(key = "today_sales_header") {
+                    EmofahSectionHeader(title = "Today's Recorded Sales")
+                }
+
+                if (todaySales.isEmpty()) {
+                    item(key = "today_sales_empty") {
+                        EmofahEmptyState(
+                            icon = Icons.Outlined.ReceiptLong,
+                            title = "No Sales Recorded Today",
+                            message = "Tap Scan or Record Sale from Home to capture today's transactions.",
+                        )
+                    }
+                } else {
+                    items(
+                        items = todaySales,
+                        key = { "today_${it.saleWithItems.sale.clientSaleId}" },
+                    ) { record ->
+                        SaleHistoryCard(
+                            record = record,
+                            onOpenDetails = {
+                                inspectedSaleClientId = record.saleWithItems.sale.clientSaleId
+                                showReversalForm = false
+                                reversalReasonInput = ""
+                            },
+                        )
+                    }
+                }
+
+                if (earlierSales.isNotEmpty()) {
+                    item(key = "earlier_sales_header") {
+                        EmofahSectionHeader(
+                            title = "Earlier Sales",
+                            subtitle = "${earlierSales.size} previous record(s)",
+                        )
+                    }
+                    items(
+                        items = earlierSales.take(25),
+                        key = { "earlier_${it.saleWithItems.sale.clientSaleId}" },
+                    ) { record ->
+                        SaleHistoryCard(
+                            record = record,
+                            onOpenDetails = {
+                                inspectedSaleClientId = record.saleWithItems.sale.clientSaleId
+                                showReversalForm = false
+                                reversalReasonInput = ""
+                            },
+                        )
+                    }
+                }
+            }
+
+            1 -> {
+                item(key = "queue_counters_and_sync") {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            EmofahMetricTile(
+                                label = "Pending",
+                                value = summary.pendingCount.toString(),
+                                modifier = Modifier.weight(1f),
+                                tone = if (summary.pendingCount > 0) EmofahBadgeTone.WARNING else EmofahBadgeTone.NEUTRAL,
+                            )
+                            EmofahMetricTile(
+                                label = "Conflicts",
+                                value = summary.conflictCount.toString(),
+                                modifier = Modifier.weight(1f),
+                                tone = if (summary.conflictCount > 0) EmofahBadgeTone.DANGER else EmofahBadgeTone.NEUTRAL,
+                            )
+                            EmofahMetricTile(
+                                label = "Synced",
+                                value = summary.syncedCount.toString(),
+                                modifier = Modifier.weight(1f),
+                                tone = EmofahBadgeTone.SUCCESS,
+                            )
+                        }
+
+                        EmofahLoadingButton(
+                            text = "Sync Pending Items Now",
+                            loadingText = "Syncing Queue...",
+                            isLoading = isSyncing,
+                            icon = Icons.Outlined.Sync,
+                            onClick = onSyncNow,
+                        )
+                    }
+                }
+
+                if (summary.authBlockedCount > 0 || authState.status == AuthStatus.SESSION_EXPIRED) {
+                    item(key = "queue_auth_hold") {
+                        EmofahFeedbackBanner(
+                            title = "Authentication Hold (${summary.authBlockedCount} item(s))",
+                            message = "Sign in again to resume syncing paused records.",
+                            tone = EmofahBadgeTone.DANGER,
+                            actionLabel = "Sign In",
+                            onAction = onOpenAuthDialog,
+                        )
+                    }
+                }
+
+                if (summary.conflictEvents.isNotEmpty()) {
+                    item(key = "queue_conflicts_header") {
+                        EmofahSectionHeader(
+                            title = "Conflicts Requiring Review",
+                            subtitle = "Resolve or retry items rejected by the server",
+                        )
+                    }
+                    items(
+                        items = summary.conflictEvents,
+                        key = { "conflict_${it.eventId}" },
+                    ) { conflict ->
+                        val category = ConflictPolicy.classifyQueueConflict(conflict)
+                        val canResolveConflictReversal = RolePermissionPolicy.hasPermission(
+                            staffRole,
+                            EmofahPermission.RESOLVE_SYNC_CONFLICT_REVERSAL,
+                        )
+                        EmofahCard(
+                            containerColor = colors.dangerContainer,
+                            borderColor = colors.danger.copy(alpha = 0.28f),
                         ) {
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Outlined.WarningAmber, contentDescription = null)
+                                Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = colors.danger)
                                 Text(
                                     text = "${conflict.eventType} · ${conflict.entityId.take(10)}",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
+                                    color = colors.danger,
                                 )
                             }
                             Text(
                                 text = "${category.name}: ${conflict.failureReason ?: "Server rejected update."}",
                                 style = MaterialTheme.typography.bodySmall,
-                            )
-                            val canResolveConflictReversal = RolePermissionPolicy.hasPermission(
-                                staffRole,
-                                EmofahPermission.RESOLVE_SYNC_CONFLICT_REVERSAL,
+                                color = colors.textPrimary,
                             )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -472,6 +467,7 @@ fun ActivitySyncScreen(
                                 OutlinedButton(
                                     onClick = { onRetryConflictAfterRestock(conflict) },
                                     enabled = !isSyncing,
+                                    shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.weight(1f),
                                 ) {
                                     Text("Retry Sync", maxLines = 1)
@@ -480,6 +476,7 @@ fun ActivitySyncScreen(
                                     Button(
                                         onClick = { onReverseConflictLocally(conflict) },
                                         enabled = !isSyncing,
+                                        shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier.weight(1f),
                                     ) {
                                         Text("Reverse Locally", maxLines = 1)
@@ -495,99 +492,102 @@ fun ActivitySyncScreen(
                                         imageVector = Icons.Outlined.Lock,
                                         contentDescription = null,
                                         modifier = Modifier.size(14.dp),
+                                        tint = colors.textMuted,
                                     )
                                     Text(
                                         text = "Local reversal requires Supervisor or Owner/Manager sign-in.",
                                         style = MaterialTheme.typography.labelSmall,
+                                        color = colors.textMuted,
                                     )
                                 }
                             }
                         }
                     }
                 }
+
+                item(key = "queue_pending_header") {
+                    EmofahSectionHeader(title = "Pending Queue (${summary.actionableEvents.size})")
+                }
+
+                if (summary.actionableEvents.isEmpty()) {
+                    item(key = "queue_pending_empty") {
+                        EmofahEmptyState(
+                            icon = Icons.Outlined.CloudDone,
+                            title = "Queue Clear",
+                            message = "No queued items waiting to upload.",
+                        )
+                    }
+                } else {
+                    items(
+                        items = summary.actionableEvents,
+                        key = { "pending_${it.eventId}" },
+                    ) { evt ->
+                        QueueEventCard(
+                            event = evt,
+                            timeFormat = queueTimeFormat,
+                            canRetry = !isSyncing,
+                            onRetry = { onRetryEvent(evt) },
+                        )
+                    }
+                }
+
+                if (summary.recentSyncedEvents.isNotEmpty()) {
+                    item(key = "queue_recent_header") {
+                        EmofahSectionHeader(title = "Recently Synced (${summary.recentSyncedEvents.size})")
+                    }
+                    items(
+                        items = summary.recentSyncedEvents,
+                        key = { "synced_${it.eventId}" },
+                    ) { evt ->
+                        QueueEventCard(
+                            event = evt,
+                            timeFormat = queueTimeFormat,
+                            canRetry = false,
+                            onRetry = {},
+                        )
+                    }
+                }
+
+                item(key = "queue_settings_cards") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        StaffAuthStatusCard(
+                            authState = authState,
+                            isOnline = summary.isOnline,
+                            pendingSyncCount = summary.pendingCount + summary.authBlockedCount,
+                            onOpenSignIn = onOpenAuthDialog,
+                            onRefreshSession = onRefreshSession,
+                            onSignOut = onSignOut,
+                        )
+                        NotificationSettingsCard()
+                        ReliabilityRecoveryCard(
+                            snapshot = reliabilitySnapshot,
+                            isRunning = isRunningRecovery,
+                            statusMessage = recoveryStatusMessage,
+                            onRunRecovery = onRunRecoveryCleanup,
+                        )
+                    }
+                }
             }
 
-            // Pending / Retrying / Auth-Hold Events
-            Text(
-                text = "Pending Queue (${summary.actionableEvents.size})",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-
-            if (summary.actionableEvents.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    Text(
-                        text = "No queued items waiting to upload.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(14.dp),
-                    )
-                }
-            } else {
-                summary.actionableEvents.forEach { evt ->
-                    QueueEventCard(
-                        event = evt,
-                        canRetry = !isSyncing,
-                        onRetry = { onRetryEvent(evt) },
-                    )
-                }
-            }
-
-            // Recently Synced History
-            if (summary.recentSyncedEvents.isNotEmpty()) {
-                Text(
-                    text = "Recently Synced (${summary.recentSyncedEvents.size})",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+            else -> {
+                auditTrailItems(
+                    localAudits = localAudits,
+                    remoteAudits = remoteAudits,
+                    staffRole = staffRole,
+                    currentActorId = authState.activeActorId,
+                    isOnline = summary.isOnline,
+                    isSyncingAudits = isSyncingAudits,
+                    isLoadingRemoteAudits = isLoadingRemoteAudits,
+                    auditStatusMessage = auditStatusMessage,
+                    onSyncAuditsNow = onSyncAuditsNow,
+                    onLoadRemoteAudits = onLoadRemoteAudits,
+                    viewState = auditViewState,
+                    onViewStateChange = { auditViewState = it },
                 )
-                summary.recentSyncedEvents.forEach { evt ->
-                    QueueEventCard(
-                        event = evt,
-                        canRetry = false,
-                        onRetry = {},
-                    )
-                }
             }
-
-            Spacer(Modifier.height(4.dp))
-            StaffAuthStatusCard(
-                authState = authState,
-                isOnline = summary.isOnline,
-                pendingSyncCount = summary.pendingCount + summary.authBlockedCount,
-                onOpenSignIn = onOpenAuthDialog,
-                onRefreshSession = onRefreshSession,
-                onSignOut = onSignOut,
-            )
-
-            Spacer(Modifier.height(4.dp))
-            NotificationSettingsCard()
-
-            Spacer(Modifier.height(4.dp))
-            ReliabilityRecoveryCard(
-                snapshot = reliabilitySnapshot,
-                isRunning = isRunningRecovery,
-                statusMessage = recoveryStatusMessage,
-                onRunRecovery = onRunRecoveryCleanup,
-            )
-        } else {
-            AuditTrailSection(
-                localAudits = localAudits,
-                remoteAudits = remoteAudits,
-                staffRole = staffRole,
-                currentActorId = authState.activeActorId,
-                isOnline = summary.isOnline,
-                isSyncingAudits = isSyncingAudits,
-                isLoadingRemoteAudits = isLoadingRemoteAudits,
-                auditStatusMessage = auditStatusMessage,
-                onSyncAuditsNow = onSyncAuditsNow,
-                onLoadRemoteAudits = onLoadRemoteAudits,
-            )
         }
     }
 
-    // Sale Detail & Authorised Safe Reversal Modal
     if (inspectedRecord != null) {
         val sale = inspectedRecord.saleWithItems.sale
         val items = inspectedRecord.saleWithItems.items
@@ -605,6 +605,7 @@ fun ActivitySyncScreen(
                     text = inspectedRecord.primaryProductName,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Bold,
                 )
             },
             text = {
@@ -620,12 +621,12 @@ fun ActivitySyncScreen(
                         SaleSyncStatusBadge(inspectedRecord.syncBadge)
                         Text(
                             text = inspectedRecord.formattedDateTime,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall.tabular(),
+                            color = colors.textMuted,
                         )
                     }
 
-                    HorizontalDivider()
+                    HorizontalDivider(color = colors.borderSubtle)
 
                     items.forEach { item ->
                         val itemOverridden = item.originalSellPrice > 0.0 &&
@@ -638,29 +639,29 @@ fun ActivitySyncScreen(
                             )
                             Text(
                                 text = "Unit: Ksh ${item.unitSellPrice.roundToInt()} · Line total: Ksh ${item.lineTotal.roundToInt()}",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.tabular(),
                             )
                             if (itemOverridden) {
                                 Text(
                                     text = "Price override from Ksh ${item.originalSellPrice.roundToInt()} (${item.priceOverrideReason ?: "Authorized"})",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.tertiary,
+                                    color = colors.warning,
                                 )
                             }
                         }
                     }
 
-                    HorizontalDivider()
+                    HorizontalDivider(color = colors.borderSubtle)
 
                     Text(
                         text = "Total: Ksh ${sale.totalAmount.roundToInt()} · ${inspectedRecord.paymentLabel}",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodyMedium.tabular(),
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
                         text = "Recorded by ${sale.actorId} on ${sale.deviceId}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textMuted,
                     )
                     Text(
                         text = buildString {
@@ -669,29 +670,16 @@ fun ActivitySyncScreen(
                                 append(" · Server #${sale.serverSaleId}")
                             }
                         },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = colors.textMuted,
                     )
 
                     if (sale.isReversed) {
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                            ),
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text(
-                                    text = "Sale Reversed (Original Record Preserved)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                                Text(
-                                    text = "Reason: ${sale.reversalReason ?: "Authorized reversal"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        }
+                        EmofahFeedbackBanner(
+                            title = "Sale Reversed (Original Preserved)",
+                            message = "Reason: ${sale.reversalReason ?: "Authorized reversal"}",
+                            tone = EmofahBadgeTone.DANGER,
+                        )
                     } else if (!canReverseRole) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -701,26 +689,26 @@ fun ActivitySyncScreen(
                                 imageVector = Icons.Outlined.Lock,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = colors.textMuted,
                             )
                             Text(
                                 text = "Reversing a completed sale requires Supervisor or Owner/Manager authorization (Current role: ${staffRole.label}).",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = colors.textMuted,
                             )
                         }
                     } else if (showReversalForm) {
-                        HorizontalDivider()
+                        HorizontalDivider(color = colors.borderSubtle)
                         Text(
                             text = "Authorised Sale Reversal",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.error,
+                            color = colors.danger,
                         )
                         Text(
                             text = "The original transaction stays in history, stock (${inspectedRecord.totalQuantity} unit(s)) is restored, and an accounting/audit entry is logged.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = colors.textMuted,
                         )
                         OutlinedTextField(
                             value = reversalReasonInput,
@@ -729,6 +717,7 @@ fun ActivitySyncScreen(
                             placeholder = { Text("e.g. Wrong variant / customer cancelled") },
                             singleLine = false,
                             maxLines = 3,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -765,9 +754,7 @@ fun ActivitySyncScreen(
                                     inspectedSaleClientId = null
                                 },
                                 enabled = canConfirmReversal && !isReversingSale,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error,
-                                ),
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.danger),
                             ) {
                                 Text(if (isReversingSale) "Reversing..." else "Confirm Reversal")
                             }
@@ -803,163 +790,116 @@ private fun SaleHistoryCard(
     record: SaleHistoryRecordUi,
     onOpenDetails: () -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     val isReversed = record.saleWithItems.sale.isReversed
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onOpenDetails),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isReversed) {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-            } else {
-                MaterialTheme.colorScheme.surface
-            },
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isReversed) 0.dp else 1.dp),
+    EmofahInteractiveCard(
+        onClick = onOpenDetails,
+        containerColor = if (isReversed) colors.surfaceMuted else colors.surfaceCard,
+        contentPadding = PaddingValues(14.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = record.primaryProductName,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textDecoration = if (isReversed) TextDecoration.LineThrough else TextDecoration.None,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "Ksh ${record.totalAmount.roundToInt()}",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    textDecoration = if (isReversed) TextDecoration.LineThrough else TextDecoration.None,
-                    color = if (isReversed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                )
-            }
+            Text(
+                text = record.primaryProductName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textDecoration = if (isReversed) TextDecoration.LineThrough else TextDecoration.None,
+                color = colors.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Ksh ${record.totalAmount.roundToInt()}",
+                style = MaterialTheme.typography.titleSmall.tabular(),
+                fontWeight = FontWeight.Bold,
+                textDecoration = if (isReversed) TextDecoration.LineThrough else TextDecoration.None,
+                color = if (isReversed) colors.textMuted else MaterialTheme.colorScheme.primary,
+            )
+        }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = buildString {
-                        append("Qty ${record.totalQuantity}")
-                        append(" · ${record.paymentLabel}")
-                        append(" · ${if (record.isToday) record.formattedTime else record.formattedDateTime}")
-                        if (record.hasPriceOverride) append(" · Override")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                SaleSyncStatusBadge(record.syncBadge)
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = buildString {
+                    append("Qty ${record.totalQuantity}")
+                    append(" · ${record.paymentLabel}")
+                    append(" · ${if (record.isToday) record.formattedTime else record.formattedDateTime}")
+                    if (record.hasPriceOverride) append(" · Override")
+                },
+                style = MaterialTheme.typography.labelSmall.tabular(),
+                color = colors.textMuted,
+                modifier = Modifier.weight(1f),
+            )
+            SaleSyncStatusBadge(record.syncBadge)
         }
     }
 }
 
 @Composable
 private fun SaleSyncStatusBadge(badge: SaleHistorySyncBadge) {
-    val (bgColor, fgColor) = when (badge) {
-        SaleHistorySyncBadge.SERVER_CONFIRMED ->
-            MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
-        SaleHistorySyncBadge.LOCAL_PENDING ->
-            MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
-        SaleHistorySyncBadge.CONFLICT, SaleHistorySyncBadge.FAILED ->
-            MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
-        SaleHistorySyncBadge.REVERSED ->
-            MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    val tone = when (badge) {
+        SaleHistorySyncBadge.SERVER_CONFIRMED -> EmofahBadgeTone.SUCCESS
+        SaleHistorySyncBadge.LOCAL_PENDING -> EmofahBadgeTone.WARNING
+        SaleHistorySyncBadge.CONFLICT, SaleHistorySyncBadge.FAILED -> EmofahBadgeTone.DANGER
+        SaleHistorySyncBadge.REVERSED -> EmofahBadgeTone.NEUTRAL
     }
-
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = bgColor,
-    ) {
-        Text(
-            text = badge.label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = fgColor,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
-}
-
-@Composable
-private fun QueueCountCard(label: String, count: Int, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = 12.dp, horizontal = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
+    EmofahStatusBadge(text = badge.label, tone = tone)
 }
 
 @Composable
 private fun QueueEventCard(
     event: SyncQueueEventEntity,
+    timeFormat: SimpleDateFormat,
     canRetry: Boolean,
     onRetry: () -> Unit,
 ) {
-    val created = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(event.createdAtEpochMs))
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-    ) {
+    val colors = MaterialTheme.emofahColors
+    val created = remember(event.createdAtEpochMs) {
+        timeFormat.format(Date(event.createdAtEpochMs))
+    }
+    EmofahCard(contentPadding = PaddingValues(13.dp)) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Text(
                     text = "${event.eventType} · ${event.entityId.take(12)}",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
+                    color = colors.textPrimary,
                 )
                 Text(
                     text = "Status: ${event.status} · Retries: ${event.retryCount} · $created",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall.tabular(),
+                    color = colors.textMuted,
                 )
                 event.failureReason?.let { reason ->
                     Text(
                         text = reason,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = colors.danger,
                     )
                 }
             }
 
             if (canRetry && event.status != "SYNCED" && event.status != "RESOLVED_LOCALLY") {
-                OutlinedButton(onClick = onRetry) {
+                OutlinedButton(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(10.dp),
+                ) {
                     Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Retry")
@@ -971,6 +911,7 @@ private fun QueueEventCard(
 
 @Composable
 private fun NotificationSettingsCard() {
+    val colors = MaterialTheme.emofahColors
     val context = LocalContext.current
     val notifPrefs = remember(context) { NotificationPrefs(context) }
     var prefsState by remember(context) { mutableStateOf(notifPrefs.readState()) }
@@ -984,96 +925,81 @@ private fun NotificationSettingsCard() {
         systemEnabled = EmofahNotificationManager.areSystemNotificationsEnabled(context)
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    EmofahCard {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.NotificationsActive,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+            Icon(
+                imageVector = Icons.Outlined.NotificationsActive,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Notifications & Operational Alerts",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
                 )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Notifications & Operational Alerts",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = if (systemEnabled) {
-                            "Device alerts active"
-                        } else {
-                            "Notification permission disabled on this device"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (systemEnabled) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
-                }
+                Text(
+                    text = if (systemEnabled) "Device alerts active" else "Notification permission disabled",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (systemEnabled) colors.success else colors.danger,
+                )
             }
-
-            if (!systemEnabled) {
-                OutlinedButton(
-                    onClick = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                            !EmofahNotificationManager.hasPostNotificationsPermission(context)
-                        ) {
-                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        } else {
-                            runCatching {
-                                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                                    if (context !is android.app.Activity) {
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                }
-                                context.startActivity(intent)
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Allow Notifications")
-                }
-            }
-
-            NotificationSwitchRow(
-                title = "New Online Orders",
-                subtitle = "Alert when storefront orders arrive pending action",
-                checked = prefsState.ordersEnabled,
-                onCheckedChange = { enabled ->
-                    prefsState = notifPrefs.setOrdersEnabled(enabled)
-                },
-            )
-            NotificationSwitchRow(
-                title = "Sync Conflicts & Sign-In Holds",
-                subtitle = "Alert when queued sales or stock changes need review",
-                checked = prefsState.syncAlertsEnabled,
-                onCheckedChange = { enabled ->
-                    prefsState = notifPrefs.setSyncAlertsEnabled(enabled)
-                },
-            )
-            NotificationSwitchRow(
-                title = "Low & Out-of-Stock Alerts",
-                subtitle = "Alert when active products drop to threshold or 0",
-                checked = prefsState.stockAlertsEnabled,
-                onCheckedChange = { enabled ->
-                    prefsState = notifPrefs.setStockAlertsEnabled(enabled)
-                },
-            )
         }
+
+        if (!systemEnabled) {
+            OutlinedButton(
+                onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        !EmofahNotificationManager.hasPostNotificationsPermission(context)
+                    ) {
+                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        runCatching {
+                            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                if (context !is android.app.Activity) {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            }
+                            context.startActivity(intent)
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Allow Notifications")
+            }
+        }
+
+        NotificationSwitchRow(
+            title = "New Online Orders",
+            subtitle = "Alert when storefront orders arrive pending action",
+            checked = prefsState.ordersEnabled,
+            onCheckedChange = { enabled ->
+                prefsState = notifPrefs.setOrdersEnabled(enabled)
+            },
+        )
+        NotificationSwitchRow(
+            title = "Sync Conflicts & Sign-In Holds",
+            subtitle = "Alert when queued sales or stock changes need review",
+            checked = prefsState.syncAlertsEnabled,
+            onCheckedChange = { enabled ->
+                prefsState = notifPrefs.setSyncAlertsEnabled(enabled)
+            },
+        )
+        NotificationSwitchRow(
+            title = "Low & Out-of-Stock Alerts",
+            subtitle = "Alert when active products drop to threshold or 0",
+            checked = prefsState.stockAlertsEnabled,
+            onCheckedChange = { enabled ->
+                prefsState = notifPrefs.setStockAlertsEnabled(enabled)
+            },
+        )
     }
 }
 
@@ -1084,6 +1010,7 @@ private fun NotificationSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1098,11 +1025,12 @@ private fun NotificationSwitchRow(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
+                color = colors.textPrimary,
             )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textMuted,
             )
         }
         Switch(
@@ -1119,57 +1047,46 @@ private fun ReliabilityRecoveryCard(
     statusMessage: String?,
     onRunRecovery: () -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     val totalMb = remember(snapshot?.totalCacheBytes) {
         val bytes = snapshot?.totalCacheBytes ?: 0L
         String.format(Locale.getDefault(), "%.2f MB", bytes / (1024.0 * 1024.0))
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    EmofahCard {
+        EmofahSectionHeader(title = "Storage & Recovery Guard")
+        Text(
+            text = if (snapshot == null) {
+                "Checking local queue integrity and cached scan storage..."
+            } else {
+                "Cache used: $totalMb · Active protected assets: ${snapshot.protectedAssetCount} · In-flight: ${snapshot.inFlightCount}"
+            },
+            style = MaterialTheme.typography.bodySmall.tabular(),
+            color = colors.textMuted,
+        )
+        if (snapshot != null && (snapshot.dependencyBlockedCount > 0 || snapshot.malformedCount > 0)) {
+            Text(
+                text = "Detected ${snapshot.dependencyBlockedCount} dependency-blocked and ${snapshot.malformedCount} malformed item(s). Run self-check to quarantine safely.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.danger,
+            )
+        }
+        statusMessage?.let { msg ->
+            Text(
+                text = msg,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        OutlinedButton(
+            onClick = onRunRecovery,
+            enabled = !isRunning,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(
-                text = "Storage & Recovery Guard",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = if (snapshot == null) {
-                    "Checking local queue integrity and cached scan storage..."
-                } else {
-                    "Cache used: $totalMb · Active protected assets: ${snapshot.protectedAssetCount} · In-flight: ${snapshot.inFlightCount}"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (snapshot != null && (snapshot.dependencyBlockedCount > 0 || snapshot.malformedCount > 0)) {
-                Text(
-                    text = "Detected ${snapshot.dependencyBlockedCount} dependency-blocked and ${snapshot.malformedCount} malformed item(s). Run self-check to quarantine safely.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            statusMessage?.let { msg ->
-                Text(
-                    text = msg,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            OutlinedButton(
-                onClick = onRunRecovery,
-                enabled = !isRunning,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (isRunning) "Running Self-Check..." else "Run Self-Check & Clean Cache")
-            }
+            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(if (isRunning) "Running Self-Check..." else "Run Self-Check & Clean Cache")
         }
     }
 }

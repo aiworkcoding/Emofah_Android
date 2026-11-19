@@ -30,8 +30,14 @@ class SupabaseProductRepository(
     )
     val imageCache = ReferenceImageCache(context)
 
-    init {
-        referenceIndex.loadFromDisk()
+    @Volatile
+    private var isDiskIndexLoaded = false
+
+    suspend fun ensureDiskIndexLoaded() = withContext(Dispatchers.IO) {
+        if (!isDiskIndexLoaded) {
+            referenceIndex.loadFromDisk()
+            isDiskIndexLoaded = true
+        }
     }
 
     data class SyncResult(
@@ -61,6 +67,7 @@ class SupabaseProductRepository(
     suspend fun syncCatalogueAndRebuildIndex(
         forceNetwork: Boolean = true,
     ): SyncResult = withContext(Dispatchers.IO) {
+        ensureDiskIndexLoaded()
         val nowMs = System.currentTimeMillis()
         if (!forceNetwork) {
             val freshness = getCacheFreshness(nowMs)

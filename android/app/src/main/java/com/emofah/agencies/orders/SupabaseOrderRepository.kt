@@ -105,6 +105,13 @@ class SupabaseOrderRepository(
         }
     }
 
+    suspend fun readCachedSnapshotAsync(
+        catalogueProducts: List<ProductIdentity>,
+        reason: String? = null,
+    ): OrderFeedSnapshot = withContext(Dispatchers.IO) {
+        readCachedSnapshotImmediate(catalogueProducts, reason)
+    }
+
     fun readCachedSnapshotImmediate(
         catalogueProducts: List<ProductIdentity>,
         reason: String? = null,

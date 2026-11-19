@@ -187,4 +187,41 @@ class RolePermissionsStage92Test {
         )
         assertTrue(countForbidden is StockCountRpcOutcome.AuthRequired)
     }
+
+    @Test
+    fun serverStaffProfile_parsesBootstrapNeededFlag() {
+        val bootstrapTrue = ServerStaffProfile.fromJson(
+            """
+                {
+                  "authenticated": true,
+                  "user_id": "u-first-1",
+                  "email": "founder@emofah.co.ke",
+                  "full_name": "Founder",
+                  "staff_role": "CASHIER",
+                  "is_active": true,
+                  "bootstrap_needed": true
+                }
+            """.trimIndent()
+        )
+        assertNotNull(bootstrapTrue)
+        assertTrue(bootstrapTrue!!.bootstrapNeeded)
+        assertEquals(StaffRole.CASHIER, bootstrapTrue.staffRole)
+
+        val bootstrapFalse = ServerStaffProfile.fromJson(
+            """
+                {
+                  "authenticated": true,
+                  "user_id": "u-owner-1",
+                  "email": "owner@emofah.co.ke",
+                  "full_name": "Owner",
+                  "staff_role": "OWNER_MANAGER",
+                  "is_active": true,
+                  "bootstrap_needed": false
+                }
+            """.trimIndent()
+        )
+        assertNotNull(bootstrapFalse)
+        assertFalse(bootstrapFalse!!.bootstrapNeeded)
+        assertEquals(StaffRole.OWNER_MANAGER, bootstrapFalse.staffRole)
+    }
 }

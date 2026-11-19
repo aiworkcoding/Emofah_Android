@@ -1,9 +1,10 @@
 package com.emofah.agencies.ui.screens
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,25 +13,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -57,6 +55,15 @@ import com.emofah.agencies.orders.StoreOrderStatus
 import com.emofah.agencies.receipts.DigitalReceiptData
 import com.emofah.agencies.receipts.DigitalReceiptFormatter
 import com.emofah.agencies.sales.PaymentMethod
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahEmptyState
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahInteractiveCard
+import com.emofah.agencies.ui.components.EmofahSearchField
+import com.emofah.agencies.ui.components.EmofahSkeletonCard
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
+import com.emofah.agencies.ui.theme.tabular
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -70,12 +77,6 @@ private enum class OrderStatusFilter(val label: String) {
     CANCELLED("Cancelled"),
 }
 
-/**
- * Stage 6.1 + Stage 6.2 — Online Orders Retrieval & Operational Management Screen.
- * Displays live and cached storefront orders from shared `public.orders` with status filtering,
- * search, detailed itemized inspection, Pending Sync badges, and operational status transitions
- * (Pending -> Confirmed -> Ready -> Fulfilled / Cancelled).
- */
 @Composable
 fun OrdersScreen(
     snapshot: OrderFeedSnapshot,
@@ -89,6 +90,7 @@ fun OrdersScreen(
     onConvertOrderToSale: (StoreOrderRecord, List<ResolvedOrderSaleLine>, PaymentMethod) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier,
 ) {
+    val colors = MaterialTheme.emofahColors
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(OrderStatusFilter.ALL) }
     var inspectedOrderId by remember { mutableStateOf<String?>(null) }
@@ -99,6 +101,16 @@ fun OrdersScreen(
 
     val liveInspectedOrder = remember(snapshot.orders, inspectedOrderId) {
         inspectedOrderId?.let { targetId -> snapshot.orders.find { it.id == targetId } }
+    }
+
+    val filterCounts = remember(snapshot.orders) {
+        mapOf(
+            OrderStatusFilter.ALL to snapshot.orders.size,
+            OrderStatusFilter.PENDING to snapshot.orders.count { it.status == StoreOrderStatus.PENDING || it.status == StoreOrderStatus.UNKNOWN },
+            OrderStatusFilter.ACTIVE to snapshot.orders.count { it.status == StoreOrderStatus.CONFIRMED || it.status == StoreOrderStatus.READY },
+            OrderStatusFilter.FULFILLED to snapshot.orders.count { it.status == StoreOrderStatus.FULFILLED },
+            OrderStatusFilter.CANCELLED to snapshot.orders.count { it.status == StoreOrderStatus.CANCELLED },
+        )
     }
 
     val filteredOrders = remember(snapshot.orders, searchQuery, selectedFilter) {
@@ -121,151 +133,110 @@ fun OrdersScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Header + Refresh
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Online Orders",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                val freshness = snapshot.lastFetchedEpochMs?.let {
-                    "Last synced: ${timeFormat.format(Date(it))}"
-                } ?: if (isDeviceOnline) "Connected · Tap refresh" else "Offline"
-                Text(
-                    text = freshness,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            OutlinedButton(
-                onClick = onRefresh,
-                enabled = !isRefreshing && !isUpdatingOrder,
-                shape = RoundedCornerShape(14.dp),
+        item(key = "orders_header") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (isRefreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Online Orders",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary,
+                    )
+                    val freshness = snapshot.lastFetchedEpochMs?.let {
+                        "Last synced: ${timeFormat.format(Date(it))}"
+                    } ?: if (isDeviceOnline) "Connected · Tap refresh" else "Offline · Cached feed"
+                    Text(
+                        text = freshness,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted,
+                    )
                 }
-                Spacer(Modifier.width(6.dp))
-                Text(if (isRefreshing) "Syncing" else "Refresh")
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !isRefreshing && !isUpdatingOrder,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, colors.borderStrong),
+                ) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (isRefreshing) "Syncing" else "Refresh")
+                }
             }
         }
 
         val bannerText = actionMessage?.takeIf { it.isNotBlank() } ?: snapshot.statusMessage
-        bannerText?.let { msg ->
-            Surface(
-                color = if (actionMessage != null) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = msg,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (actionMessage != null) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.padding(12.dp),
+        if (bannerText != null) {
+            item(key = "orders_banner") {
+                EmofahFeedbackBanner(
+                    title = if (actionMessage != null) "Order Update" else "Sync Status",
+                    message = bannerText,
+                    tone = if (actionMessage != null) EmofahBadgeTone.INFO else EmofahBadgeTone.NEUTRAL,
                 )
             }
         }
 
-        // Search
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            label = { Text("Search order #, item, or customer") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            trailingIcon = if (searchQuery.isNotEmpty()) {
-                {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Outlined.Close, contentDescription = "Clear search")
-                    }
-                }
-            } else {
-                null
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        // Status filter chips
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OrderStatusFilter.entries.forEach { filter ->
-                val count = when (filter) {
-                    OrderStatusFilter.ALL -> snapshot.orders.size
-                    OrderStatusFilter.PENDING -> snapshot.orders.count { it.status == StoreOrderStatus.PENDING || it.status == StoreOrderStatus.UNKNOWN }
-                    OrderStatusFilter.ACTIVE -> snapshot.orders.count { it.status == StoreOrderStatus.CONFIRMED || it.status == StoreOrderStatus.READY }
-                    OrderStatusFilter.FULFILLED -> snapshot.orders.count { it.status == StoreOrderStatus.FULFILLED }
-                    OrderStatusFilter.CANCELLED -> snapshot.orders.count { it.status == StoreOrderStatus.CANCELLED }
-                }
-                FilterChip(
-                    selected = selectedFilter == filter,
-                    onClick = { selectedFilter = filter },
-                    label = { Text("${filter.label} ($count)") },
+        item(key = "orders_search_and_filters") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                EmofahSearchField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = "Search order #, item, or customer",
                 )
-            }
-        }
 
-        if (filteredOrders.isEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.ShoppingBag,
-                        contentDescription = null,
-                        modifier = Modifier.size(40.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = if (snapshot.orders.isEmpty()) "No Storefront Orders Yet" else "No Matching Orders",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = if (snapshot.orders.isEmpty()) {
-                            "Shared public.orders currently has 0 orders. Storefront checkouts will appear here automatically on refresh."
-                        } else {
-                            "Adjust the status filter or search query to inspect other orders."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    OrderStatusFilter.entries.forEach { filter ->
+                        val count = filterCounts[filter] ?: 0
+                        FilterChip(
+                            selected = selectedFilter == filter,
+                            onClick = { selectedFilter = filter },
+                            label = { Text("${filter.label} ($count)") },
+                        )
+                    }
                 }
             }
+        }
+
+        if (isRefreshing && snapshot.orders.isEmpty()) {
+            items(4, key = { "order_skeleton_$it" }) {
+                EmofahSkeletonCard()
+            }
+        } else if (filteredOrders.isEmpty()) {
+            item(key = "orders_empty") {
+                EmofahEmptyState(
+                    icon = Icons.Outlined.ShoppingBag,
+                    title = if (snapshot.orders.isEmpty()) "No Storefront Orders Yet" else "No Matching Orders",
+                    message = if (snapshot.orders.isEmpty()) {
+                        "Shared public.orders currently has 0 orders. Storefront checkouts will appear here automatically on refresh."
+                    } else {
+                        "Adjust the status filter or search query to inspect other orders."
+                    },
+                    actionLabel = if (snapshot.orders.isEmpty() && isDeviceOnline) "Refresh Now" else null,
+                    onAction = if (snapshot.orders.isEmpty() && isDeviceOnline) onRefresh else null,
+                )
+            }
         } else {
-            filteredOrders.forEach { order ->
+            items(
+                items = filteredOrders,
+                key = { it.id },
+            ) { order ->
                 OrderSummaryCard(
                     order = order,
                     timeFormat = timeFormat,
@@ -321,143 +292,97 @@ private fun OrderSummaryCard(
     timeFormat: SimpleDateFormat,
     onClick: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    val colors = MaterialTheme.emofahColors
+    EmofahInteractiveCard(
+        onClick = onClick,
+        contentPadding = PaddingValues(14.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                text = "Order ${order.displayNumber}",
+                style = MaterialTheme.typography.titleMedium.tabular(),
+                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary,
+            )
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "Order ${order.displayNumber}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (order.isConvertedToSale) {
-                        ConvertedSaleChip()
-                    }
-                    if (order.isPendingSync) {
-                        PendingSyncChip()
-                    }
-                    OrderStatusBadge(status = order.status, rawStatus = order.rawStatus)
+                if (order.isConvertedToSale) {
+                    EmofahStatusBadge(text = "Sale", tone = EmofahBadgeTone.INFO)
                 }
+                if (order.isPendingSync) {
+                    EmofahStatusBadge(text = "Sync", tone = EmofahBadgeTone.WARNING)
+                }
+                OrderStatusBadge(status = order.status, rawStatus = order.rawStatus)
             }
+        }
 
-            if (!order.customerName.isNullOrBlank() || !order.customerPhone.isNullOrBlank()) {
-                val custLine = listOfNotNull(order.customerName, order.customerPhone).joinToString(" · ")
-                Text(
-                    text = custLine,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
+        if (!order.customerName.isNullOrBlank() || !order.customerPhone.isNullOrBlank()) {
+            val custLine = listOfNotNull(order.customerName, order.customerPhone).joinToString(" · ")
+            Text(
+                text = custLine,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = colors.textPrimary,
+            )
+        }
 
-            val itemsPreview = if (order.items.isEmpty()) {
-                "No line items decoded"
+        val itemsPreview = if (order.items.isEmpty()) {
+            "No line items decoded"
+        } else {
+            order.items.take(3).joinToString(", ") { "${it.quantity}× ${it.productName}" } +
+                if (order.items.size > 3) " +${order.items.size - 3} more" else ""
+        }
+        Text(
+            text = itemsPreview,
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textMuted,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val timeText = if (order.createdAtEpochMs > 0L) {
+                timeFormat.format(Date(order.createdAtEpochMs))
             } else {
-                order.items.take(3).joinToString(", ") { "${it.quantity}× ${it.productName}" } +
-                    if (order.items.size > 3) " +${order.items.size - 3} more" else ""
+                order.createdAtIso.take(16).ifBlank { "Time unknown" }
             }
             Text(
-                text = itemsPreview,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                text = "$timeText · ${order.totalUnits} unit(s)",
+                style = MaterialTheme.typography.labelSmall.tabular(),
+                color = colors.textMuted,
             )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val timeText = if (order.createdAtEpochMs > 0L) {
-                    timeFormat.format(Date(order.createdAtEpochMs))
-                } else {
-                    order.createdAtIso.take(16).ifBlank { "Time unknown" }
-                }
-                Text(
-                    text = "$timeText · ${order.totalUnits} unit(s)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = "Ksh ${order.totalPrice.roundToInt()}",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
+            Text(
+                text = "Ksh ${order.totalPrice.roundToInt()}",
+                style = MaterialTheme.typography.titleSmall.tabular(),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }
 
 @Composable
-private fun ConvertedSaleChip() {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Text(
-            text = "Sale Recorded",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-        )
-    }
-}
-
-@Composable
-private fun PendingSyncChip() {
-    Surface(
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Text(
-            text = "Pending Sync",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onTertiaryContainer,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-        )
-    }
-}
-
-@Composable
 private fun OrderStatusBadge(status: StoreOrderStatus, rawStatus: String) {
-    val (bg, fg) = when (status) {
-        StoreOrderStatus.PENDING, StoreOrderStatus.UNKNOWN ->
-            MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
-        StoreOrderStatus.CONFIRMED, StoreOrderStatus.READY ->
-            MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
-        StoreOrderStatus.FULFILLED ->
-            MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-        StoreOrderStatus.CANCELLED ->
-            MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+    val tone = when (status) {
+        StoreOrderStatus.PENDING, StoreOrderStatus.UNKNOWN -> EmofahBadgeTone.WARNING
+        StoreOrderStatus.CONFIRMED, StoreOrderStatus.READY -> EmofahBadgeTone.INFO
+        StoreOrderStatus.FULFILLED -> EmofahBadgeTone.SUCCESS
+        StoreOrderStatus.CANCELLED -> EmofahBadgeTone.DANGER
     }
-    Surface(color = bg, shape = RoundedCornerShape(8.dp)) {
-        Text(
-            text = if (status == StoreOrderStatus.UNKNOWN) rawStatus else status.label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = fg,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
+    EmofahStatusBadge(
+        text = if (status == StoreOrderStatus.UNKNOWN) rawStatus else status.label,
+        tone = tone,
+    )
 }
 
 @Composable
@@ -470,6 +395,7 @@ private fun OrderDetailDialog(
     onOpenDigitalReceipt: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     var showCancelConfirm by remember(order.id) { mutableStateOf(false) }
     var cancelReason by remember(order.id) { mutableStateOf("") }
     var localCancelError by remember(order.id) { mutableStateOf<String?>(null) }
@@ -495,8 +421,12 @@ private fun OrderDetailDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (order.isConvertedToSale) ConvertedSaleChip()
-                    if (order.isPendingSync) PendingSyncChip()
+                    if (order.isConvertedToSale) {
+                        EmofahStatusBadge(text = "Sale", tone = EmofahBadgeTone.INFO)
+                    }
+                    if (order.isPendingSync) {
+                        EmofahStatusBadge(text = "Sync", tone = EmofahBadgeTone.WARNING)
+                    }
                     OrderStatusBadge(status = order.status, rawStatus = order.rawStatus)
                 }
             }
@@ -515,7 +445,7 @@ private fun OrderDetailDialog(
                     Text(
                         text = "Placed: $formatted",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textMuted,
                     )
                 }
                 if (!order.customerName.isNullOrBlank()) {
@@ -528,14 +458,14 @@ private fun OrderDetailDialog(
                     Text("Note: ${order.deliveryNote}", style = MaterialTheme.typography.bodySmall)
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = colors.borderSubtle)
 
                 Text("Items", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                 if (order.items.isEmpty()) {
                     Text(
                         text = "No structured item details attached to this order.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = colors.textMuted,
                     )
                 } else {
                     order.items.forEach { item ->
@@ -550,25 +480,29 @@ private fun OrderDetailDialog(
                             )
                             Text(
                                 text = "Ksh ${item.lineTotal.roundToInt()}",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.tabular(),
                                 fontWeight = FontWeight.SemiBold,
                             )
                         }
                     }
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = colors.borderSubtle)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text("Order Total", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Text("Ksh ${order.totalPrice.roundToInt()}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "Ksh ${order.totalPrice.roundToInt()}",
+                        style = MaterialTheme.typography.titleSmall.tabular(),
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
 
                 if (allowedTransitions.isNotEmpty()) {
-                    HorizontalDivider()
+                    HorizontalDivider(color = colors.borderSubtle)
                     Text(
                         text = "Order Actions",
                         style = MaterialTheme.typography.labelLarge,
@@ -620,7 +554,7 @@ private fun OrderDetailDialog(
                                 enabled = !isUpdating,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("Cancel Order", color = MaterialTheme.colorScheme.error)
+                                Text("Cancel Order", color = colors.danger)
                             }
                         } else {
                             OutlinedTextField(
@@ -634,6 +568,7 @@ private fun OrderDetailDialog(
                                 maxLines = 2,
                                 isError = localCancelError != null,
                                 supportingText = localCancelError?.let { err -> { Text(err) } },
+                                shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Row(
@@ -662,7 +597,7 @@ private fun OrderDetailDialog(
                                     },
                                     enabled = !isUpdating,
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error,
+                                        containerColor = colors.danger,
                                         contentColor = MaterialTheme.colorScheme.onError,
                                     ),
                                     modifier = Modifier.weight(1f),
@@ -695,14 +630,14 @@ private fun OrderDetailDialog(
                         Text(
                             text = "This order has no line items available to record as a product sale.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
+                            color = colors.danger,
                         )
                     }
                 } else if (order.isConvertedToSale) {
                     Text(
                         text = "Converted into shared sale & inventory movement.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = colors.success,
                         fontWeight = FontWeight.Medium,
                     )
                 }
@@ -741,6 +676,7 @@ private fun ConvertOrderToSaleDialog(
     onConfirm: (List<ResolvedOrderSaleLine>, PaymentMethod) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val colors = MaterialTheme.emofahColors
     var selectedPayment by remember(order.id) { mutableStateOf(PaymentMethod.MPESA) }
     var linkedProductsByLine by remember(order.id, catalogueProducts) {
         mutableStateOf(
@@ -749,7 +685,7 @@ private fun ConvertOrderToSaleDialog(
                     catalogueProducts.isEmpty() || catalogueProducts.any { it.id == pid && !it.isArchived }
                 }
                 validPid?.let { idx to it }
-            }.toMap()
+            }.toMap(),
         )
     }
     var pickingLineIndex by remember { mutableStateOf<Int?>(null) }
@@ -801,7 +737,7 @@ private fun ConvertOrderToSaleDialog(
                 Text(
                     text = "Creates real shared sale record(s), deducts stock, and marks the order Fulfilled.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textMuted,
                 )
 
                 Text("Payment Method", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
@@ -818,13 +754,14 @@ private fun ConvertOrderToSaleDialog(
                     }
                 }
 
-                HorizontalDivider()
+                HorizontalDivider(color = colors.borderSubtle)
 
                 Text("Order Items (${resolvedLines.size})", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                 resolvedLines.forEachIndexed { idx, line ->
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        color = colors.surfaceMuted,
                         shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, colors.borderSubtle),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(
@@ -843,14 +780,14 @@ private fun ConvertOrderToSaleDialog(
                                 )
                                 Text(
                                     text = "Ksh ${line.lineTotal.roundToInt()}",
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodySmall.tabular(),
                                     fontWeight = FontWeight.Bold,
                                 )
                             }
                             if (line.productId > 0L) {
                                 Text(
-                                    text = "Linked SKU #${line.productId}",
-                                    style = MaterialTheme.typography.labelSmall,
+                                    text = "Linked item #${line.productId}",
+                                    style = MaterialTheme.typography.labelSmall.tabular(),
                                     color = MaterialTheme.colorScheme.primary,
                                 )
                             } else {
@@ -862,13 +799,13 @@ private fun ConvertOrderToSaleDialog(
                                     Text(
                                         text = "Product ID not linked",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
+                                        color = colors.danger,
                                     )
                                     TextButton(
                                         onClick = {
                                             pickingLineIndex = idx
                                             productSearch = order.items[idx].productName
-                                        }
+                                        },
                                     ) {
                                         Text("Pick Product")
                                     }
@@ -882,7 +819,7 @@ private fun ConvertOrderToSaleDialog(
                     Text(
                         text = validation.errorMessage,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = colors.danger,
                     )
                 }
 
@@ -893,7 +830,7 @@ private fun ConvertOrderToSaleDialog(
                     Text("Total Sale", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Text(
                         text = "Ksh ${resolvedLines.sumOf { it.lineTotal }.roundToInt()}",
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.titleSmall.tabular(),
                         fontWeight = FontWeight.Bold,
                     )
                 }
@@ -920,39 +857,34 @@ private fun ConvertOrderToSaleDialog(
             catalogueProducts
                 .filter { !it.isArchived }
                 .filter { q.isEmpty() || it.name.lowercase().contains(q) || it.category.lowercase().contains(q) }
-                .take(25)
+                .take(30)
         }
         AlertDialog(
             onDismissRequest = { pickingLineIndex = null },
             title = { Text("Link Order Line to Product") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
+                    EmofahSearchField(
                         value = productSearch,
                         onValueChange = { productSearch = it },
-                        label = { Text("Search catalogue") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = "Search catalogue...",
                     )
-                    Column(
+                    LazyColumn(
                         modifier = Modifier
-                            .height(220.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .fillMaxWidth()
+                            .height(230.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        filtered.forEach { prod ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        linkedProductsByLine = linkedProductsByLine + (lineIdx to prod.id)
-                                        pickingLineIndex = null
-                                    },
+                        items(filtered, key = { it.id }) { prod ->
+                            EmofahInteractiveCard(
+                                onClick = {
+                                    linkedProductsByLine = linkedProductsByLine + (lineIdx to prod.id)
+                                    pickingLineIndex = null
+                                },
+                                contentPadding = PaddingValues(10.dp),
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(10.dp),
+                                    modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
                                     Text(
@@ -963,8 +895,8 @@ private fun ConvertOrderToSaleDialog(
                                     )
                                     Text(
                                         text = "Ksh ${prod.effectiveSellPrice.roundToInt()} · Qty ${prod.stockQty}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelSmall.tabular(),
+                                        color = colors.textMuted,
                                     )
                                 }
                             }

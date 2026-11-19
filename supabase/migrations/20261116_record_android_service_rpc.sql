@@ -9,12 +9,17 @@ CREATE TABLE IF NOT EXISTS public.android_service_operations (
     client_service_id text NOT NULL UNIQUE,
     idempotency_key text NOT NULL UNIQUE,
     service_type text NOT NULL CHECK (
-        service_type IN ('PRINTING', 'PHOTOCOPYING', 'SCANNING', 'INTERNET_BROWSING', 'EGOV_ASSISTANCE')
+        service_type IN (
+            'PRINTING', 'PHOTOCOPYING', 'PHOTOCOPY_BW', 'PHOTOCOPY_COLOUR',
+            'SCANNING', 'INTERNET_BROWSING', 'EGOV_ASSISTANCE',
+            'EGOV', 'P3_FORM', 'ABSTRACT', 'OTHER'
+        )
     ),
     service_label text NOT NULL,
     quantity_or_duration integer NOT NULL CHECK (quantity_or_duration > 0),
     unit_label text NOT NULL DEFAULT 'units',
     unit_price numeric NOT NULL CHECK (unit_price >= 0),
+    discount_amount numeric NOT NULL DEFAULT 0 CHECK (discount_amount >= 0),
     total_revenue numeric NOT NULL CHECK (total_revenue >= 0),
     payment_method text NOT NULL DEFAULT 'CASH',
     customer_note text NULL,
@@ -63,7 +68,8 @@ CREATE OR REPLACE FUNCTION public.record_android_service_operation(
     p_consumables jsonb DEFAULT '[]'::jsonb,
     p_actor_id text DEFAULT 'android_staff',
     p_device_id text DEFAULT 'android',
-    p_performed_at timestamptz DEFAULT now()
+    p_performed_at timestamptz DEFAULT now(),
+    p_discount_amount numeric DEFAULT 0
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -110,7 +116,11 @@ BEGIN
         );
     END IF;
 
-    IF v_clean_type NOT IN ('PRINTING', 'PHOTOCOPYING', 'SCANNING', 'INTERNET_BROWSING', 'EGOV_ASSISTANCE') THEN
+    IF v_clean_type NOT IN (
+        'PRINTING', 'PHOTOCOPYING', 'PHOTOCOPY_BW', 'PHOTOCOPY_COLOUR',
+        'SCANNING', 'INTERNET_BROWSING', 'EGOV_ASSISTANCE',
+        'EGOV', 'P3_FORM', 'ABSTRACT', 'OTHER'
+    ) THEN
         RETURN jsonb_build_object(
             'status', 'INVALID_INPUT',
             'message', format('Unsupported service type: %s', p_service_type)
@@ -124,16 +134,16 @@ BEGIN
         );
     END IF;
 
-    IF COALESCE(p_unit_price, 0) < 0 OR COALESCE(p_total_revenue, 0) < 0 THEN
+    IF COALESCE(p_unit_price, 0) < 0 OR COALESCE(p_discount_amount, 0) < 0 OR COALESCE(p_total_revenue, 0) < 0 THEN
         RETURN jsonb_build_object(
             'status', 'INVALID_INPUT',
-            'message', 'Price and revenue cannot be negative.'
+            'message', 'Price, discount, and revenue cannot be negative.'
         );
     END IF;
 
     v_effective_revenue := CASE
         WHEN COALESCE(p_total_revenue, 0) > 0 THEN p_total_revenue
-        ELSE p_quantity_or_duration * COALESCE(p_unit_price, 0)
+        ELSE GREATEST((p_quantity_or_duration * COALESCE(p_unit_price, 0)) - COALESCE(p_discount_amount, 0), 0)
     END;
 
     -- Idempotency check
@@ -179,6 +189,7 @@ BEGIN
         quantity_or_duration,
         unit_label,
         unit_price,
+        discount_amount,
         total_revenue,
         payment_method,
         customer_note,
@@ -194,6 +205,7 @@ BEGIN
         p_quantity_or_duration,
         v_clean_unit,
         COALESCE(p_unit_price, 0),
+        COALESCE(p_discount_amount, 0),
         v_effective_revenue,
         v_clean_payment,
         v_clean_note,
@@ -373,9 +385,9 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.record_android_service_operation(
-    text, text, text, text, integer, text, numeric, numeric, text, text, jsonb, text, text, timestamptz
+    text, text, text, text, integer, text, numeric, numeric, text, text, jsonb, text, text, timestamptz, numeric
 ) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION public.record_android_service_operation(
-    text, text, text, text, integer, text, numeric, numeric, text, text, jsonb, text, text, timestamptz
+    text, text, text, text, integer, text, numeric, numeric, text, text, jsonb, text, text, timestamptz, numeric
 ) TO anon, authenticated, service_role;

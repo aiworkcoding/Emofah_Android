@@ -474,6 +474,7 @@ class ProductRegistrationRepository(
         newProductId: Long,
         dHash: String?,
     ) {
+        repository.ensureDiskIndexLoaded()
         val allActive = productDao.getActiveProducts()
         val identities = allActive.map(CatalogueDeltaCalculator::toProductIdentity)
         for (entity in allActive) {

@@ -14,15 +14,17 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.emofah.agencies.MainActivity
 import com.emofah.agencies.R
+import com.emofah.agencies.data.local.entities.PendingFinancialEventEntity
 import com.emofah.agencies.data.sync.SyncPassSummary
 import com.emofah.agencies.orders.StoreOrderRecord
 import com.emofah.agencies.stock.StockAlertSummary
 import com.emofah.agencies.ui.navigation.EmofahDestination
+import kotlin.math.roundToInt
 
 /**
  * Stage 7.3 — Android Notification Channels & Operational Alert Dispatcher.
  * Creates channels cleanly on Android 8+ (minSdk=26), respects Android 13+
- * POST_NOTIFICATIONS runtime permission, and deep-links taps to Orders/Activity/Stock.
+ * POST_NOTIFICATIONS runtime permission, and deep-links taps to Orders/Activity/Stock/Money.
  */
 object EmofahNotificationManager {
 
@@ -31,10 +33,12 @@ object EmofahNotificationManager {
     const val CHANNEL_ORDERS = "emofah_orders_channel"
     const val CHANNEL_SYNC_ALERTS = "emofah_sync_alerts_channel"
     const val CHANNEL_STOCK_ALERTS = "emofah_stock_alerts_channel"
+    const val CHANNEL_MPESA_INFLOW = "emofah_mpesa_inflow_channel"
 
     private const val NOTIFICATION_ID_ORDERS = 7301
     private const val NOTIFICATION_ID_SYNC = 7302
     private const val NOTIFICATION_ID_STOCK = 7303
+    private const val NOTIFICATION_ID_MPESA_BASE = 7400
 
     fun requiresRuntimePermission(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -84,7 +88,40 @@ object EmofahNotificationManager {
             description = "Alerts when active products run low or out of stock."
         }
 
-        manager.createNotificationChannels(listOf(ordersChannel, syncChannel, stockChannel))
+        val mpesaChannel = NotificationChannel(
+            CHANNEL_MPESA_INFLOW,
+            "M-Pesa Received",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Alerts when M-Pesa money arrives so you can record a Sale or Service."
+        }
+
+        manager.createNotificationChannels(listOf(ordersChannel, syncChannel, stockChannel, mpesaChannel))
+    }
+
+    fun notifyMpesaInflowReceived(
+        context: Context,
+        event: PendingFinancialEventEntity,
+    ): Boolean {
+        if (!event.direction.equals("INFLOW", ignoreCase = true)) return false
+        val prefs = NotificationPrefs(context)
+        if (!prefs.readState().mpesaInflowAlertsEnabled) return false
+
+        val senderLabel = event.counterparty?.takeIf { it.isNotBlank() } ?: "Customer"
+        val refPart = event.transactionReference?.takeIf { it.isNotBlank() }?.let { " · Ref $it" }.orEmpty()
+        val title = "M-Pesa Received: Ksh ${event.amount.roundToInt()}"
+        val body = "From $senderLabel$refPart. Tap to record Sale or Service."
+        val notifId = NOTIFICATION_ID_MPESA_BASE + ((event.eventId.hashCode() and 0x7FFFFFFF) % 500)
+
+        return postNotification(
+            context = context,
+            channelId = CHANNEL_MPESA_INFLOW,
+            notificationId = notifId,
+            title = title,
+            body = body,
+            targetDestination = EmofahDestination.Money,
+            priority = NotificationCompat.PRIORITY_HIGH,
+        )
     }
 
     fun notifyNewOrdersIfNeeded(

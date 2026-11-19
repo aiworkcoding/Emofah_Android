@@ -1,11 +1,10 @@
 package com.emofah.agencies.ui.screens
 
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,14 +25,9 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Remove
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,8 +45,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,14 +57,18 @@ import com.emofah.agencies.sales.StaffRole
 import com.emofah.agencies.stock.StockAdjustmentDraft
 import com.emofah.agencies.stock.StockAdjustmentReason
 import com.emofah.agencies.stock.StockAdjustmentResult
-import com.emofah.agencies.stock.StockAdjustmentValidator
-import kotlin.math.abs
+import com.emofah.agencies.ui.components.EmofahBadgeTone
+import com.emofah.agencies.ui.components.EmofahCard
+import com.emofah.agencies.ui.components.EmofahFeedbackBanner
+import com.emofah.agencies.ui.components.EmofahInteractiveCard
+import com.emofah.agencies.ui.components.EmofahLoadingButton
+import com.emofah.agencies.ui.components.EmofahLocalImage
+import com.emofah.agencies.ui.components.EmofahSearchField
+import com.emofah.agencies.ui.components.EmofahSectionHeader
+import com.emofah.agencies.ui.components.EmofahStatusBadge
+import com.emofah.agencies.ui.theme.emofahColors
+import com.emofah.agencies.ui.theme.tabular
 
-/**
- * Stage 4.3 — Stock Adjustment Screen (Blueprint Part F).
- * Supports recording inventory adjustments (damage, expiration, shrinkage, store use, count corrections)
- * with mandatory accounting reasons, explanation notes, supervisor authorization checks, and offline Room fallback.
- */
 @Composable
 fun StockAdjustmentScreen(
     selectedProduct: ProductIdentity?,
@@ -89,6 +85,7 @@ fun StockAdjustmentScreen(
     onBackToLookup: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val colors = MaterialTheme.emofahColors
     var selectedReason by remember { mutableStateOf(StockAdjustmentReason.DAMAGED) }
     var adjustmentMagnitude by remember { mutableIntStateOf(1) }
     var notesInput by remember { mutableStateOf("") }
@@ -102,7 +99,6 @@ fun StockAdjustmentScreen(
 
     val currentAvailable = stockProjection?.provisionalAvailableQty ?: selectedProduct?.stockQty ?: 0
 
-    // Compute effective delta
     val effectiveDelta = when (entryMode) {
         AdjustmentEntryMode.DELTA -> {
             if (selectedReason.isDecrease) -adjustmentMagnitude else adjustmentMagnitude
@@ -115,18 +111,17 @@ fun StockAdjustmentScreen(
 
     val projectedNewStock = (currentAvailable + effectiveDelta).coerceAtLeast(0)
 
-    val bitmap = remember(cachedPhotoPath) {
-        cachedPhotoPath?.let { BitmapFactory.decodeFile(it) }
-    }
-
     val manualProductMatches = remember(manualSearchQuery, cachedProducts) {
         val q = manualSearchQuery.trim().lowercase()
-        if (q.length < 2) emptyList()
-        else cachedProducts.filter {
-            it.name.lowercase().contains(q) ||
-                it.category.lowercase().contains(q) ||
-                (it.variantLabel?.lowercase()?.contains(q) == true)
-        }.take(6)
+        if (q.length < 2) {
+            emptyList()
+        } else {
+            cachedProducts.filter {
+                it.name.lowercase().contains(q) ||
+                    it.category.lowercase().contains(q) ||
+                    (it.variantLabel?.lowercase()?.contains(q) == true)
+            }.take(8)
+        }
     }
 
     Column(
@@ -136,17 +131,24 @@ fun StockAdjustmentScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Navigation Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "Stock Adjustment",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
+            Column {
+                Text(
+                    text = "Stock Adjustment",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                )
+                Text(
+                    text = "Record damage, shrinkage, store use, or count variance",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.textMuted,
+                )
+            }
             if (onBackToLookup != null) {
                 OutlinedButton(
                     onClick = onBackToLookup,
@@ -158,198 +160,127 @@ fun StockAdjustmentScreen(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text("Stock Lookup")
+                    Text("Stock")
                 }
             }
         }
 
-        // Feedback Card from last submission
         lastOutcome?.let { outcome ->
-            val (containerColor, title, message) = when (outcome) {
+            val (tone, title, message) = when (outcome) {
                 is StockAdjustmentResult.SuccessOnline -> Triple(
-                    MaterialTheme.colorScheme.primaryContainer,
+                    EmofahBadgeTone.SUCCESS,
                     "Stock Adjusted Online · Synced",
-                    "Delta (${if (outcome.quantityDelta > 0) "+${outcome.quantityDelta}" else "${outcome.quantityDelta}"}) applied. Server stock updated to ${outcome.updatedServerQty} units.",
+                    "Delta (${if (outcome.quantityDelta > 0) "+${outcome.quantityDelta}" else "${outcome.quantityDelta}"}) applied. Server stock: ${outcome.updatedServerQty} units.",
                 )
                 is StockAdjustmentResult.SavedOffline -> Triple(
-                    MaterialTheme.colorScheme.tertiaryContainer,
-                    "Saved Locally Offline · Queued",
-                    "Delta (${if (outcome.quantityDelta > 0) "+${outcome.quantityDelta}" else "${outcome.quantityDelta}"}) applied locally. Provisional stock: ${outcome.provisionalRemainingQty}. ${outcome.reasonMessage}",
+                    EmofahBadgeTone.WARNING,
+                    "Saved on Phone · Will Upload",
+                    "Change (${if (outcome.quantityDelta > 0) "+${outcome.quantityDelta}" else "${outcome.quantityDelta}"}) saved offline. Estimated stock: ${outcome.provisionalRemainingQty}. ${outcome.reasonMessage}",
                 )
                 is StockAdjustmentResult.DuplicateIgnored -> Triple(
-                    MaterialTheme.colorScheme.secondaryContainer,
+                    EmofahBadgeTone.INFO,
                     "Duplicate Tap Ignored",
                     "This adjustment was already applied (server stock: ${outcome.serverQty}).",
                 )
                 is StockAdjustmentResult.Rejected -> Triple(
-                    MaterialTheme.colorScheme.errorContainer,
+                    EmofahBadgeTone.DANGER,
                     "Adjustment Rejected",
                     outcome.message,
                 )
             }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = containerColor),
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (outcome is StockAdjustmentResult.Rejected) Icons.Outlined.WarningAmber else Icons.Outlined.CheckCircle,
-                            contentDescription = null,
-                        )
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
+            EmofahFeedbackBanner(
+                title = title,
+                message = message,
+                tone = tone,
+            )
         }
 
-        // Step 1: Select Product
         if (selectedProduct == null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+            EmofahCard {
+                EmofahSectionHeader(
+                    title = "Step 1 · Identify Product",
+                    subtitle = "Scan packaging or search your local catalogue",
+                )
+
+                Button(
+                    onClick = onScanToSelect,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(
-                        text = "Step 1: Identify Product to Adjust",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = "Scan packaging with camera or select an existing product from catalogue.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Icon(Icons.Outlined.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Scan Product to Adjust")
+                }
 
-                    Button(
-                        onClick = onScanToSelect,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth(),
+                EmofahSearchField(
+                    value = manualSearchQuery,
+                    onValueChange = { manualSearchQuery = it },
+                    placeholder = "Search product name or category...",
+                )
+
+                manualProductMatches.forEach { product ->
+                    EmofahInteractiveCard(
+                        onClick = { onSelectProductManually(product) },
+                        contentPadding = PaddingValues(12.dp),
                     ) {
-                        Icon(Icons.Outlined.CameraAlt, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Scan Product to Adjust")
-                    }
-
-                    OutlinedTextField(
-                        value = manualSearchQuery,
-                        onValueChange = { manualSearchQuery = it },
-                        label = { Text("Or find in catalogue") },
-                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    manualProductMatches.forEach { product ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onSelectProductManually(product) },
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = product.name,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = "${product.category} · Stock: ${product.stockQty}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Select",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold,
+                                    text = product.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "${product.category} · Stock: ${product.stockQty}",
+                                    style = MaterialTheme.typography.labelSmall.tabular(),
+                                    color = colors.textMuted,
                                 )
                             }
+                            EmofahStatusBadge(text = "Select", tone = EmofahBadgeTone.INFO)
                         }
                     }
                 }
             }
         } else {
-            // Selected Product Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            EmofahCard(
+                containerColor = colors.surfaceElevated,
+                borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = selectedProduct.name,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(RoundedCornerShape(12.dp)),
-                            contentScale = ContentScale.Crop,
-                        )
-                    } else {
-                        Surface(
-                            modifier = Modifier.size(56.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Inventory2,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                    }
+                    EmofahLocalImage(
+                        path = cachedPhotoPath,
+                        contentDescription = selectedProduct.name,
+                        fallbackIcon = Icons.Outlined.Inventory2,
+                        maxDimensionPx = 256,
+                        modifier = Modifier
+                            .size(58.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                    )
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = selectedProduct.name,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
+                            color = colors.textPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             text = "${selectedProduct.category} · Available: $currentAvailable units",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall.tabular(),
+                            color = colors.textMuted,
                         )
                     }
 
@@ -359,283 +290,245 @@ fun StockAdjustmentScreen(
                 }
             }
 
-            // Step 2: Reason Selection
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        text = "Reason Code (Required)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
+            EmofahCard {
+                EmofahSectionHeader(
+                    title = "Reason Code *",
+                    subtitle = selectedReason.description,
+                )
 
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        StockAdjustmentReason.entries.chunked(2).forEach { rowReasons ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                rowReasons.forEach { reason ->
-                                    FilterChip(
-                                        selected = selectedReason == reason,
-                                        onClick = {
-                                            selectedReason = reason
-                                        },
-                                        label = {
-                                            Text(
-                                                text = reason.label,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = if (selectedReason == reason) FontWeight.Bold else FontWeight.Normal,
-                                            )
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = selectedReason.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            // Step 3: Quantity Controls
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Adjustment Quantity",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(
-                                selected = entryMode == AdjustmentEntryMode.DELTA,
-                                onClick = { entryMode = AdjustmentEntryMode.DELTA },
-                                label = { Text("Units (±)") },
-                            )
-                            FilterChip(
-                                selected = entryMode == AdjustmentEntryMode.COUNT_TARGET,
-                                onClick = { entryMode = AdjustmentEntryMode.COUNT_TARGET },
-                                label = { Text("Count Target") },
-                            )
-                        }
-                    }
-
-                    if (entryMode == AdjustmentEntryMode.DELTA) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedButton(
-                                onClick = { adjustmentMagnitude = (adjustmentMagnitude - 1).coerceAtLeast(1) },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.size(48.dp),
-                            ) {
-                                Icon(Icons.Outlined.Remove, contentDescription = "Decrease")
-                            }
-
-                            Surface(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "${if (selectedReason.isDecrease) "-" else "+"}$adjustmentMagnitude unit(s)",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                }
-                            }
-
-                            Button(
-                                onClick = { adjustmentMagnitude += 1 },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.size(48.dp),
-                            ) {
-                                Icon(Icons.Outlined.Add, contentDescription = "Increase")
-                            }
-                        }
-
-                        // Quick Chips
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StockAdjustmentReason.entries.chunked(2).forEach { rowReasons ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            listOf(1, 2, 5, 10).forEach { chipQty ->
-                                OutlinedButton(
-                                    onClick = { adjustmentMagnitude = chipQty },
-                                    shape = RoundedCornerShape(10.dp),
+                            rowReasons.forEach { reason ->
+                                FilterChip(
+                                    selected = selectedReason == reason,
+                                    onClick = { selectedReason = reason },
+                                    label = {
+                                        Text(
+                                            text = reason.label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (selectedReason == reason) FontWeight.SemiBold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    },
                                     modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(text = "$chipQty")
-                                }
+                                )
                             }
                         }
-                    } else {
-                        OutlinedTextField(
-                            value = countedPhysicalStockInput,
-                            onValueChange = { countedPhysicalStockInput = it },
-                            label = { Text("Physical count found on shelf") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
+                    }
+                }
+            }
+
+            EmofahCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Adjustment Quantity",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.textPrimary,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(
+                            selected = entryMode == AdjustmentEntryMode.DELTA,
+                            onClick = { entryMode = AdjustmentEntryMode.DELTA },
+                            label = { Text("Units (±)") },
+                        )
+                        FilterChip(
+                            selected = entryMode == AdjustmentEntryMode.COUNT_TARGET,
+                            onClick = { entryMode = AdjustmentEntryMode.COUNT_TARGET },
+                            label = { Text("Target") },
                         )
                     }
+                }
 
-                    // Stock Comparison summary
-                    Surface(
+                if (entryMode == AdjustmentEntryMode.DELTA) {
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                        FilledTonalIconButton(
+                            onClick = { adjustmentMagnitude = (adjustmentMagnitude - 1).coerceAtLeast(1) },
                         ) {
-                            Column {
+                            Icon(Icons.Outlined.Remove, contentDescription = "Decrease")
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = colors.surfaceMuted,
+                            border = BorderStroke(1.dp, colors.borderSubtle),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
                                 Text(
-                                    text = "Current Stock: $currentAvailable",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(
-                                    text = "Adjustment: ${if (effectiveDelta > 0) "+$effectiveDelta" else "$effectiveDelta"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (effectiveDelta < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = "New Provisional Stock",
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                                Text(
-                                    text = "$projectedNewStock units",
-                                    style = MaterialTheme.typography.titleMedium,
+                                    text = "${if (selectedReason.isDecrease) "-" else "+"}$adjustmentMagnitude unit(s)",
+                                    style = MaterialTheme.typography.titleMedium.tabular(),
                                     fontWeight = FontWeight.Bold,
+                                    color = colors.textPrimary,
                                 )
                             }
                         }
-                    }
-                }
-            }
 
-            // Step 4: Explanation Notes
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        text = "Explanation Notes (Required)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    OutlinedTextField(
-                        value = notesInput,
-                        onValueChange = { notesInput = it },
-                        label = { Text("Details: batch, cause, location or action taken") },
-                        placeholder = { Text("e.g. Lid cracked during offloading from supplier truck") },
-                        minLines = 2,
-                        maxLines = 4,
-                        leadingIcon = { Icon(Icons.Outlined.EditNote, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        text = "Minimum 3 characters. Mandatory for audit trail.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (notesInput.trim().length < 3 && notesInput.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            // Step 5: Authorization Notice / Supervisor Override
-            val canAdjustDirectly = RolePermissionPolicy.hasPermission(staffRole, EmofahPermission.ADJUST_STOCK)
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (!canAdjustDirectly) {
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
+                        FilledTonalIconButton(
+                            onClick = { adjustmentMagnitude += 1 },
+                        ) {
+                            Icon(Icons.Outlined.Add, contentDescription = "Increase")
+                        }
                     }
-                ),
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Security,
-                            contentDescription = null,
-                            tint = if (!canAdjustDirectly) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            text = if (!canAdjustDirectly) "Supervisor Authorization Required" else "Authorized by Role (${staffRole.label})",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        listOf(1, 2, 5, 10).forEach { chipQty ->
+                            OutlinedButton(
+                                onClick = { adjustmentMagnitude = chipQty },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(text = "$chipQty", style = MaterialTheme.typography.labelLarge.tabular())
+                            }
+                        }
                     }
+                } else {
+                    OutlinedTextField(
+                        value = countedPhysicalStockInput,
+                        onValueChange = { countedPhysicalStockInput = it },
+                        label = { Text("Physical count found on shelf") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
 
-                    if (!canAdjustDirectly) {
-                        Text(
-                            text = "Cashiers cannot authorize discretionary stock adjustments. Online sync also requires a Supervisor or Owner/Manager sign-in.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        OutlinedTextField(
-                            value = supervisorOverrideInput,
-                            onValueChange = { supervisorOverrideInput = it },
-                            label = { Text("Supervisor PIN or Name") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.surfaceMuted,
+                    border = BorderStroke(1.dp, colors.borderSubtle),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column {
+                            Text(
+                                text = "Current: $currentAvailable",
+                                style = MaterialTheme.typography.bodySmall.tabular(),
+                                color = colors.textMuted,
+                            )
+                            Text(
+                                text = "Adjustment: ${if (effectiveDelta > 0) "+$effectiveDelta" else "$effectiveDelta"}",
+                                style = MaterialTheme.typography.bodySmall.tabular(),
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (effectiveDelta < 0) colors.danger else MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "Projected Stock",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.textMuted,
+                            )
+                            Text(
+                                text = "$projectedNewStock units",
+                                style = MaterialTheme.typography.titleMedium.tabular(),
+                                fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary,
+                            )
+                        }
                     }
                 }
             }
 
-            // Submit Button
+            EmofahCard {
+                EmofahSectionHeader(
+                    title = "Explanation Notes *",
+                    subtitle = "Minimum 3 characters for audit trail",
+                )
+                OutlinedTextField(
+                    value = notesInput,
+                    onValueChange = { notesInput = it },
+                    label = { Text("Details: batch, cause, location or action taken") },
+                    placeholder = { Text("e.g. Lid cracked during offloading") },
+                    minLines = 2,
+                    maxLines = 4,
+                    isError = notesInput.trim().length < 3 && notesInput.isNotEmpty(),
+                    leadingIcon = { Icon(Icons.Outlined.EditNote, contentDescription = null) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            val canAdjustDirectly = RolePermissionPolicy.hasPermission(staffRole, EmofahPermission.ADJUST_STOCK)
+            EmofahCard(
+                containerColor = if (!canAdjustDirectly) colors.dangerContainer else colors.surfaceMuted,
+                borderColor = if (!canAdjustDirectly) colors.danger.copy(alpha = 0.25f) else colors.borderSubtle,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Security,
+                        contentDescription = null,
+                        tint = if (!canAdjustDirectly) colors.danger else MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = if (!canAdjustDirectly) {
+                            "Supervisor Authorization Required"
+                        } else {
+                            "Authorized by Role (${staffRole.label})"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.textPrimary,
+                    )
+                }
+
+                if (!canAdjustDirectly) {
+                    Text(
+                        text = "Cashiers cannot authorize discretionary stock adjustments. Online sync also requires a Supervisor or Owner/Manager sign-in.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textPrimary,
+                    )
+                    OutlinedTextField(
+                        value = supervisorOverrideInput,
+                        onValueChange = { supervisorOverrideInput = it },
+                        label = { Text("Supervisor PIN or Name") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
             val isFormValid = effectiveDelta != 0 &&
                 notesInput.trim().length >= 3 &&
                 (canAdjustDirectly || supervisorOverrideInput.trim().isNotEmpty())
 
-            Button(
+            EmofahLoadingButton(
+                text = "Apply Adjustment (${if (effectiveDelta > 0) "+$effectiveDelta" else "$effectiveDelta"} Units)",
+                loadingText = "Applying Adjustment...",
+                isLoading = isSubmitting,
+                enabled = isFormValid,
+                icon = Icons.Outlined.CheckCircle,
+                containerColor = if (effectiveDelta < 0) colors.danger else MaterialTheme.colorScheme.primary,
                 onClick = {
-                    if (!isFormValid || isSubmitting) return@Button
                     val draft = StockAdjustmentDraft(
                         productId = selectedProduct.id,
                         productName = selectedProduct.name,
@@ -647,28 +540,7 @@ fun StockAdjustmentScreen(
                     )
                     onSubmitAdjustment(draft)
                 },
-                enabled = isFormValid && !isSubmitting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (effectiveDelta < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                ),
-            ) {
-                if (isSubmitting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                } else {
-                    Text(
-                        text = "APPLY ADJUSTMENT (${if (effectiveDelta > 0) "+$effectiveDelta" else "$effectiveDelta"} UNITS)",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
+            )
         }
     }
 }

@@ -1,7 +1,7 @@
 package com.emofah.agencies.recognition
 
 import android.content.Context
-import android.graphics.BitmapFactory
+import com.emofah.agencies.camera.ImageQualityMath
 import com.emofah.agencies.camera.PreparedCaptureResult
 import com.emofah.agencies.data.SupabaseConfig
 import com.emofah.agencies.data.catalog.CatalogueDeltaCalculator
@@ -49,6 +49,7 @@ class OnDeviceProductRecognizer(
 
     suspend fun recognizeOffline(capture: PreparedCaptureResult): RecognitionOutcome =
         withContext(Dispatchers.IO) {
+            repository.ensureDiskIndexLoaded()
             val ocrText = extractOcrText(capture.recognitionCopyPath)
 
             val productDao = database.productDao()
@@ -229,7 +230,7 @@ class OnDeviceProductRecognizer(
     private suspend fun extractOcrText(imagePath: String): String {
         val file = File(imagePath)
         if (!file.exists()) return ""
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return ""
+        val bitmap = ImageQualityMath.decodeUprightBitmap(file, 960) ?: return ""
         return try {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
             suspendCancellableCoroutine { cont ->
