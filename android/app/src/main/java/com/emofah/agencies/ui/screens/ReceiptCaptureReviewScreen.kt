@@ -63,6 +63,7 @@ import com.emofah.agencies.purchases.ExtractedReceiptLineDraft
 import com.emofah.agencies.purchases.PurchaseItemCategory
 import com.emofah.agencies.purchases.PurchaseReceiptDraft
 import com.emofah.agencies.purchases.PurchaseSubmissionResult
+import com.emofah.agencies.purchases.ReceiptArithmeticValidator
 import com.emofah.agencies.purchases.ReceiptDraftValidator
 import com.emofah.agencies.ui.components.EmofahBadgeTone
 import com.emofah.agencies.ui.components.EmofahCard
@@ -105,6 +106,30 @@ fun ReceiptCaptureReviewScreen(
         cachedProducts.filter { !it.isArchived && it.id > 0L }
     }
     var pickerLineId by remember { mutableStateOf<String?>(null) }
+    var subtotalText by remember(draft.clientPurchaseId, draft.subtotalAmount) {
+        mutableStateOf(
+            if (draft.subtotalAmount > 0.0) {
+                if (draft.subtotalAmount % 1.0 == 0.0) draft.subtotalAmount.toInt().toString()
+                else draft.subtotalAmount.toString()
+            } else ""
+        )
+    }
+    var discountText by remember(draft.clientPurchaseId, draft.discountAmount) {
+        mutableStateOf(
+            if (draft.discountAmount > 0.0) {
+                if (draft.discountAmount % 1.0 == 0.0) draft.discountAmount.toInt().toString()
+                else draft.discountAmount.toString()
+            } else ""
+        )
+    }
+    var taxText by remember(draft.clientPurchaseId, draft.taxAmount) {
+        mutableStateOf(
+            if (draft.taxAmount > 0.0) {
+                if (draft.taxAmount % 1.0 == 0.0) draft.taxAmount.toInt().toString()
+                else draft.taxAmount.toString()
+            } else ""
+        )
+    }
     var printedTotalText by remember(draft.clientPurchaseId, draft.extractedTotal) {
         mutableStateOf(
             if (draft.extractedTotal > 0.0) {
@@ -117,6 +142,7 @@ fun ReceiptCaptureReviewScreen(
     }
 
     val validation = remember(draft) { ReceiptDraftValidator.validate(draft) }
+    val arithmeticReport = remember(draft) { ReceiptArithmeticValidator.validate(draft) }
 
     fun updateDraftWithReset(next: PurchaseReceiptDraft) {
         onUpdateDraft(next)
@@ -268,6 +294,74 @@ fun ReceiptCaptureReviewScreen(
                 )
             }
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = draft.paymentMethod,
+                    onValueChange = { updateDraftWithReset(draft.copy(paymentMethod = it, isHumanConfirmed = false)) },
+                    label = { Text("Payment Method") },
+                    placeholder = { Text("Cash / M-Pesa / Bank") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = draft.paymentReference,
+                    onValueChange = { updateDraftWithReset(draft.copy(paymentReference = it, isHumanConfirmed = false)) },
+                    label = { Text("Payment Ref") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = subtotalText,
+                    onValueChange = { raw ->
+                        subtotalText = raw
+                        val parsed = raw.replace(",", "").toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        updateDraftWithReset(draft.copy(subtotalAmount = parsed, isHumanConfirmed = false))
+                    },
+                    label = { Text("Subtotal (Ksh)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = discountText,
+                    onValueChange = { raw ->
+                        discountText = raw
+                        val parsed = raw.replace(",", "").toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        updateDraftWithReset(draft.copy(discountAmount = parsed, isHumanConfirmed = false))
+                    },
+                    label = { Text("Discount") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = taxText,
+                    onValueChange = { raw ->
+                        taxText = raw
+                        val parsed = raw.replace(",", "").toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        updateDraftWithReset(draft.copy(taxAmount = parsed, isHumanConfirmed = false))
+                    },
+                    label = { Text("VAT / Tax") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
             OutlinedTextField(
                 value = printedTotalText,
                 onValueChange = { raw ->
@@ -275,7 +369,7 @@ fun ReceiptCaptureReviewScreen(
                     val parsed = raw.replace(",", "").toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
                     updateDraftWithReset(draft.copy(extractedTotal = parsed, isHumanConfirmed = false))
                 },
-                label = { Text("Printed Receipt Total (Ksh)") },
+                label = { Text("Printed Grand Total (Ksh)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
@@ -302,13 +396,21 @@ fun ReceiptCaptureReviewScreen(
                         fontWeight = FontWeight.SemiBold,
                         color = colors.textPrimary,
                     )
-                    if (diff > 1.0) {
+                    if (arithmeticReport.hasDiscrepancies || diff > 1.5) {
                         EmofahStatusBadge(
-                            text = "Differs Ksh ${diff.roundToInt()}",
+                            text = if (diff > 1.5) "Differs Ksh ${diff.roundToInt()}" else "Check math",
                             tone = EmofahBadgeTone.DANGER,
                         )
                     }
                 }
+            }
+
+            if (arithmeticReport.warnings.isNotEmpty()) {
+                EmofahFeedbackBanner(
+                    title = "Arithmetic Discrepancy Flagged",
+                    message = arithmeticReport.warnings.joinToString("\n") { "• $it" },
+                    tone = EmofahBadgeTone.WARNING,
+                )
             }
         }
 
@@ -535,6 +637,16 @@ private fun ReceiptLineEditorCard(
             },
         )
     }
+    var lineTotalText by remember(line.localLineId, line.lineTotal) {
+        mutableStateOf(
+            if (line.lineTotal > 0.0) {
+                if (line.lineTotal % 1.0 == 0.0) line.lineTotal.toInt().toString()
+                else line.lineTotal.toString()
+            } else {
+                ""
+            },
+        )
+    }
     var sellPriceText by remember(line.localLineId, line.newProductSellPrice) {
         mutableStateOf(
             line.newProductSellPrice?.let {
@@ -542,6 +654,8 @@ private fun ReceiptLineEditorCard(
             }.orEmpty(),
         )
     }
+    val lineArithmeticMismatch = line.unitCost > 0.0 && line.lineTotal > 0.0 &&
+        abs((line.quantity.coerceAtLeast(1) * line.unitCost) - line.lineTotal) > 1.5
 
     EmofahCard {
         Row(
@@ -786,6 +900,32 @@ private fun ReceiptLineEditorCard(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.weight(0.9f),
             )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = lineTotalText,
+                onValueChange = { raw ->
+                    lineTotalText = raw
+                    val parsed = raw.replace(",", "").toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                    onUpdateLine(line.copy(lineTotal = parsed))
+                },
+                label = { Text("Printed Line Total (Ksh)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f),
+            )
+            if (lineArithmeticMismatch) {
+                EmofahStatusBadge(
+                    text = "${line.quantity}×${line.unitCost.roundToInt()} ≠ ${line.lineTotal.roundToInt()}",
+                    tone = EmofahBadgeTone.WARNING,
+                )
+            }
         }
     }
 }

@@ -150,23 +150,13 @@ object AuditAccountabilityPolicy {
     }
 
     /**
-     * Supervisors & Owner/Managers inspect all device/store records;
-     * Cashiers see only entries attributed to their own actor ID.
+     * All staff members can inspect full device/store audit records (append-only accountability).
      */
     fun scopeForRole(
         records: List<AuditRecordUi>,
         staffRole: StaffRole,
         currentActorId: String,
-    ): List<AuditRecordUi> {
-        if (RolePermissionPolicy.hasPermission(staffRole, EmofahPermission.VIEW_FULL_AUDIT_LOG)) {
-            return records
-        }
-        val normalizedActor = currentActorId.trim().lowercase()
-        return records.filter { rec ->
-            rec.actorId.trim().lowercase() == normalizedActor ||
-                (rec.category == AuditCategory.AUTH_SECURITY && rec.actorId.trim().lowercase() == "guest")
-        }
-    }
+    ): List<AuditRecordUi> = records
 
     fun applyFilters(
         records: List<AuditRecordUi>,

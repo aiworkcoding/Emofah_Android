@@ -67,6 +67,18 @@ const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs';
+const PUBLIC_STORAGE_BASE_URL =
+  import.meta.env.VITE_SUPABASE_PUBLIC_STORAGE_BASE_URL ||
+  'https://nbmmfdiqywmkjaltezro.supabase.co/storage/v1/object/public/product-images/';
+
+function normalizeProductImageUrl(raw: string | null | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const base = PUBLIC_STORAGE_BASE_URL.replace(/\/+$/, '');
+  const rel = trimmed.replace(/^\/+/, '').replace(/^product-images\//, '');
+  return `${base}/${rel}`;
+}
 
 const CATALOG_CACHE_KEY = 'emofah-supabase-products-cache-v1';
 const ALIASES_CACHE_KEY = 'emofah-confirmed-aliases-v1';
@@ -128,7 +140,7 @@ export function extractProductIdentity(row: SupabaseProductRow): ProductIdentity
     discountPrice: Number(row.discount_price) || 0,
     buyPrice: Number(row.buy_price) || 0,
     stockQty: Number(row.qty) || 0,
-    imageUrl: row.image_url?.trim() || null,
+    imageUrl: normalizeProductImageUrl(row.image_url),
     description: row.description?.trim() || null,
     isFeatured: Boolean(row.is_featured),
     createdAt: row.created_at || null,

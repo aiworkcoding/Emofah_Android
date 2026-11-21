@@ -16,6 +16,9 @@ data class SupabaseProductDto(
     val description: String?,
     val discountPrice: Double,
     val isFeatured: Boolean,
+    val sku: String? = null,
+    val barcode: String? = null,
+    val isActive: Boolean = true,
 )
 
 enum class ReferenceAngle {
@@ -56,6 +59,8 @@ data class ProductIdentity(
     val isFeatured: Boolean,
     val createdAt: String?,
     val isArchived: Boolean = false,
+    val sku: String? = null,
+    val barcode: String? = null,
 ) {
     val effectiveSellPrice: Double
         get() = if (discountPrice > 0.0) discountPrice else sellPrice
@@ -75,6 +80,8 @@ data class RecognitionReferenceEntry(
     val referencePhotoCount: Int,
     val isArchived: Boolean,
     val updatedAtIso: String,
+    val sku: String? = null,
+    val barcode: String? = null,
 )
 
 data class RecognitionIndexSnapshot(

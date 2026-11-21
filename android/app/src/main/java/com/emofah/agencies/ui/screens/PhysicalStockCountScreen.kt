@@ -213,15 +213,11 @@ fun PhysicalStockCountScreen(
                         }
 
                         EmofahLoadingButton(
-                            text = if (canSubmitCount) {
-                                "Submit & Reconcile Count"
-                            } else {
-                                "Supervisor / Manager Required"
-                            },
+                            text = "Submit & Reconcile Count",
                             loadingText = "Submitting Count...",
                             isLoading = isSubmitting,
-                            enabled = canSubmitCount && !isLoading && items.isNotEmpty(),
-                            icon = if (canSubmitCount) Icons.Default.CheckCircle else Icons.Default.Lock,
+                            enabled = !isLoading && items.isNotEmpty(),
+                            icon = Icons.Default.CheckCircle,
                             onClick = {
                                 val draft = StockCountSessionDraft(
                                     sessionName = sessionName,
@@ -293,16 +289,6 @@ fun PhysicalStockCountScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (!canSubmitCount) {
-                    item(key = "auth_warning") {
-                        EmofahFeedbackBanner(
-                            title = "Read-Only Preview (${staffRole.label})",
-                            message = "Submitting physical stock counts requires a Supervisor or Owner/Manager session.",
-                            tone = EmofahBadgeTone.DANGER,
-                        )
-                    }
-                }
-
                 item(key = "session_meta") {
                     EmofahCard {
                         EmofahSectionHeader(title = "Count Session Details")
@@ -317,7 +303,7 @@ fun PhysicalStockCountScreen(
                         OutlinedTextField(
                             value = createdBy,
                             onValueChange = { createdBy = it },
-                            label = { Text("Auditor / Supervisor Name") },
+                            label = { Text("Staff / Counter Name") },
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,

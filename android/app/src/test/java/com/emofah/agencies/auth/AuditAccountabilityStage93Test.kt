@@ -85,14 +85,14 @@ class AuditAccountabilityStage93Test {
         )
         assertEquals(4, supervisorVisible.size)
 
-        // Cashier sees only their own attributed entries
+        // Staff role restrictions removed: Cashier also sees full audit trail with actor attribution intact
         val cashierVisible = AuditAccountabilityPolicy.scopeForRole(
             records = mapped,
             staffRole = StaffRole.CASHIER,
             currentActorId = "cashier1@emofah.co.ke",
         )
-        assertEquals(2, cashierVisible.size)
-        assertTrue(cashierVisible.all { it.actorId == "cashier1@emofah.co.ke" })
+        assertEquals(4, cashierVisible.size)
+        assertEquals(2, cashierVisible.count { it.actorId == "cashier1@emofah.co.ke" })
 
         // Category + Sync + Search filtering
         val pendingStock = AuditAccountabilityPolicy.applyFilters(

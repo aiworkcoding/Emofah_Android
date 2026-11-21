@@ -69,7 +69,9 @@ object ProductMetadataExtractor {
             description = dto.description?.trim()?.takeIf { it.isNotEmpty() },
             isFeatured = dto.isFeatured,
             createdAt = dto.createdAt,
-            isArchived = isArchived,
+            isArchived = isArchived || !dto.isActive,
+            sku = dto.sku?.trim()?.takeIf { it.isNotEmpty() },
+            barcode = dto.barcode?.trim()?.takeIf { it.isNotEmpty() },
         )
     }
 
@@ -84,6 +86,8 @@ object ProductMetadataExtractor {
             product.brandHint?.let { add(it) }
             add(product.category)
             product.description?.let { add(it) }
+            product.sku?.let { add(it) }
+            product.barcode?.let { add(it) }
             addAll(confirmedAliases)
         }
 

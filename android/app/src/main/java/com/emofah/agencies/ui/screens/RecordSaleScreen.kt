@@ -417,93 +417,66 @@ fun RecordSaleScreen(
             }
         }
 
-        // Role-guarded Price Exception Control
-        if (canOverridePrice) {
-            if (!showPriceOverride) {
+        // Open Price Exception Control (audit reason required when changed)
+        if (!showPriceOverride) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = {
+                        overridePriceText = selectedProduct.effectiveSellPrice.toInt().toString()
+                        showPriceOverride = true
+                    },
+                    enabled = !isSubmitting,
+                ) {
+                    Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Override Price")
+                }
+            }
+        } else {
+            EmofahCard(contentPadding = PaddingValues(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Authorized (${staffRole.label})",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.textMuted,
+                        text = "Price Exception",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     TextButton(
                         onClick = {
+                            showPriceOverride = false
+                            overrideReasonText = ""
                             overridePriceText = selectedProduct.effectiveSellPrice.toInt().toString()
-                            showPriceOverride = true
                         },
                         enabled = !isSubmitting,
                     ) {
-                        Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Override Price")
+                        Text("Reset")
                     }
                 }
-            } else {
-                EmofahCard(contentPadding = PaddingValues(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Authorized Price Exception",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        TextButton(
-                            onClick = {
-                                showPriceOverride = false
-                                overrideReasonText = ""
-                                overridePriceText = selectedProduct.effectiveSellPrice.toInt().toString()
-                            },
-                            enabled = !isSubmitting,
-                        ) {
-                            Text("Reset")
-                        }
-                    }
-                    OutlinedTextField(
-                        value = overridePriceText,
-                        onValueChange = { overridePriceText = it },
-                        label = { Text("Override Unit Price (Reg. Ksh ${selectedProduct.effectiveSellPrice.toInt()})") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        enabled = !isSubmitting,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = overrideReasonText,
-                        onValueChange = { overrideReasonText = it },
-                        label = { Text("Override Reason (required for audit)") },
-                        singleLine = true,
-                        enabled = !isSubmitting,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Lock,
-                    contentDescription = null,
-                    tint = colors.textMuted,
-                    modifier = Modifier.size(15.dp),
+                OutlinedTextField(
+                    value = overridePriceText,
+                    onValueChange = { overridePriceText = it },
+                    label = { Text("Override Unit Price (Reg. Ksh ${selectedProduct.effectiveSellPrice.toInt()})") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    enabled = !isSubmitting,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
                 )
-                Text(
-                    text = "Registered price locked (${staffRole.label}). Manager/Supervisor needed to override.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.textMuted,
+                OutlinedTextField(
+                    value = overrideReasonText,
+                    onValueChange = { overrideReasonText = it },
+                    label = { Text("Override Reason (required for audit)") },
+                    singleLine = true,
+                    enabled = !isSubmitting,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }

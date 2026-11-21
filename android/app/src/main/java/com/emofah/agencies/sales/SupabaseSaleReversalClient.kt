@@ -61,7 +61,7 @@ class SupabaseSaleReversalClient(
     ): SaleReversalRpcOutcome = withContext(Dispatchers.IO) {
         if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
             return@withContext SaleReversalRpcOutcome.NetworkOrTransientError(
-                "Supabase credentials not configured in local.properties."
+                "Supabase configuration missing in BuildConfig."
             )
         }
 

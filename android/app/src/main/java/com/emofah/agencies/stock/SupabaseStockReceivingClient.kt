@@ -26,7 +26,7 @@ class SupabaseStockReceivingClient(
     ): StockReceiptRpcOutcome = withContext(Dispatchers.IO) {
         if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
             return@withContext StockReceiptRpcOutcome.NetworkOrTransientError(
-                "Supabase credentials not configured in local.properties."
+                "Supabase configuration missing in BuildConfig."
             )
         }
 
@@ -54,7 +54,12 @@ class SupabaseStockReceivingClient(
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
 
-            parseRpcResponse(httpStatus = code, responseBody = body)
+            val outcome = parseRpcResponse(httpStatus = code, responseBody = body)
+            if (outcome is StockReceiptRpcOutcome.RpcMissing) {
+                receiveViaProductsTableFallback(request)
+            } else {
+                outcome
+            }
         } catch (e: IOException) {
             StockReceiptRpcOutcome.NetworkOrTransientError(
                 e.message ?: "Network unreachable while submitting stock receipt."
@@ -65,6 +70,85 @@ class SupabaseStockReceivingClient(
             )
         } finally {
             conn?.disconnect()
+        }
+    }
+
+    private fun receiveViaProductsTableFallback(request: AndroidStockReceiptRpcRequest): StockReceiptRpcOutcome {
+        if (request.productId <= 0L || request.quantity <= 0) {
+            return StockReceiptRpcOutcome.Rejected("INVALID_INPUT", "Valid product ID and positive quantity required.")
+        }
+        val baseUrl = supabaseUrl.trimEnd('/')
+        var getConn: HttpURLConnection? = null
+        val currentQty: Int
+        try {
+            getConn = (URL("$baseUrl/rest/v1/products?id=eq.${request.productId}&select=id,qty&limit=1").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 7000
+                readTimeout = 9000
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Accept", "application/json")
+            }
+            val code = getConn.responseCode
+            if (code == 401 || code == 403) {
+                return StockReceiptRpcOutcome.AuthRequired("Authentication required (HTTP $code).")
+            }
+            if (code !in 200..299) {
+                return StockReceiptRpcOutcome.NetworkOrTransientError("Could not read product stock (HTTP $code).")
+            }
+            val arr = org.json.JSONArray(getConn.inputStream.bufferedReader().use { it.readText() })
+            if (arr.length() == 0) {
+                return StockReceiptRpcOutcome.Rejected("PRODUCT_NOT_FOUND", "Product #${request.productId} does not exist.")
+            }
+            currentQty = arr.getJSONObject(0).optInt("qty", 0)
+        } catch (e: IOException) {
+            return StockReceiptRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable.")
+        } finally {
+            getConn?.disconnect()
+        }
+
+        val targetQty = (currentQty + request.quantity).coerceAtLeast(0)
+        val patchPayload = JSONObject().apply {
+            put("qty", targetQty)
+            if (request.updateBuyPrice && request.unitCost != null && request.unitCost > 0.0) {
+                put("buy_price", request.unitCost)
+            }
+        }.toString()
+
+        var patchConn: HttpURLConnection? = null
+        return try {
+            patchConn = (URL("$baseUrl/rest/v1/products?id=eq.${request.productId}").openConnection() as HttpURLConnection).apply {
+                requestMethod = "PATCH"
+                connectTimeout = 8000
+                readTimeout = 10000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            patchConn.outputStream.use { it.write(patchPayload.toByteArray(Charsets.UTF_8)) }
+
+            val code = patchConn.responseCode
+            val stream = if (code in 200..299) patchConn.inputStream else patchConn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code in 200..299) {
+                val arr = runCatching { org.json.JSONArray(body) }.getOrNull()
+                val serverQty = if (arr != null && arr.length() > 0) arr.getJSONObject(0).optInt("qty", targetQty) else targetQty
+                StockReceiptRpcOutcome.CommittedOnline(serverQty = serverQty, alreadyCommitted = false)
+            } else if (code == 401 || code == 403) {
+                StockReceiptRpcOutcome.AuthRequired("Authentication required (HTTP $code).")
+            } else if (code in 400..499 && code != 408 && code != 429) {
+                StockReceiptRpcOutcome.Rejected("HTTP_$code", body.ifBlank { "Rejected (HTTP $code)." })
+            } else {
+                StockReceiptRpcOutcome.NetworkOrTransientError("Transient error updating stock (HTTP $code).")
+            }
+        } catch (e: IOException) {
+            StockReceiptRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable.")
+        } finally {
+            patchConn?.disconnect()
         }
     }
 

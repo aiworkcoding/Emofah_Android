@@ -52,7 +52,12 @@ class SupabaseOrderStatusClient(
                 val code = conn.responseCode
                 val stream = if (code in 200..299) conn.inputStream else conn.errorStream
                 val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                parseRpcResponse(code, body)
+                val outcome = parseRpcResponse(code, body)
+                if (outcome is OrderStatusRpcOutcome.RpcMissing) {
+                    updateViaOrdersTableFallback(request)
+                } else {
+                    outcome
+                }
             } catch (e: IOException) {
                 OrderStatusRpcOutcome.NetworkOrTransientError(
                     e.message ?: "Network unreachable while updating order status."
@@ -65,6 +70,60 @@ class SupabaseOrderStatusClient(
                 conn?.disconnect()
             }
         }
+
+    private fun updateViaOrdersTableFallback(request: AndroidOrderStatusRpcRequest): OrderStatusRpcOutcome {
+        val baseUrl = supabaseUrl.trimEnd('/')
+        val encodedOrderId = java.net.URLEncoder.encode(request.orderId, "UTF-8")
+        val patchPayload = JSONObject().put("status", request.targetStatus.supabaseValue).toString()
+
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/orders?id=eq.$encodedOrderId").openConnection() as HttpURLConnection).apply {
+                requestMethod = "PATCH"
+                connectTimeout = 8_000
+                readTimeout = 12_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            conn.outputStream.use { it.write(patchPayload.toByteArray(Charsets.UTF_8)) }
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code in 200..299) {
+                val arr = runCatching { org.json.JSONArray(body) }.getOrNull()
+                if (arr == null || arr.length() == 0) {
+                    OrderStatusRpcOutcome.Rejected("ORDER_NOT_FOUND", "Order ${request.orderId} not found on server.")
+                } else {
+                    val row = arr.getJSONObject(0)
+                    OrderStatusRpcOutcome.CommittedOnline(
+                        serverEventId = request.clientUpdateId,
+                        orderId = row.optString("id", request.orderId),
+                        newRawStatus = row.optString("status", request.targetStatus.supabaseValue),
+                        alreadyCommitted = false,
+                    )
+                }
+            } else if (code == 401 || code == 403) {
+                OrderStatusRpcOutcome.AuthRequired("Authentication required to update orders (HTTP $code).")
+            } else if (code in 400..499 && code != 408 && code != 429) {
+                val msg = runCatching { JSONObject(body).optString("message") }.getOrNull()?.takeIf { it.isNotBlank() } ?: "HTTP $code"
+                OrderStatusRpcOutcome.Rejected("HTTP_$code", msg)
+            } else {
+                OrderStatusRpcOutcome.NetworkOrTransientError("Server unavailable updating order (HTTP $code).")
+            }
+        } catch (e: IOException) {
+            OrderStatusRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable.")
+        } catch (e: Exception) {
+            OrderStatusRpcOutcome.NetworkOrTransientError(e.message ?: "Unexpected error.")
+        } finally {
+            conn?.disconnect()
+        }
+    }
 
     companion object {
         internal fun buildRpcPayloadJson(req: AndroidOrderStatusRpcRequest): String {

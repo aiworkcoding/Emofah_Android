@@ -19,11 +19,15 @@ import java.io.File
 import kotlin.coroutines.resume
 
 /**
- * Stage 1.3 + Stage 1.4 + Stage 1.6:
- * Runs 100% offline on-device recognition first (ML Kit OCR + Room + dHash).
- * When local recognition is uncertain/unidentified and online, optionally falls back
- * to cloud-assisted recognition with strict catalogue ID validation, cost control,
- * and confirmed recognition learning + correction sync.
+ * Stage 1.3 + Stage 1.4 + Stage 1.6 + Bundled TFLite Vision Recognition:
+ * Runs 100% offline on-device recognition first:
+ * - Embedded TFLite MobileNetV3-Small visual embeddings (`models/emofah_vision_model.tflite`)
+ * - Offline ZXing barcode / QR decoding
+ * - ML Kit OCR packaging text
+ * - Perceptual dHash + cached Supabase product reference photographs
+ *
+ * When local recognition is uncertain/unidentified and online (and an endpoint exists),
+ * optionally offers cloud-assisted recognition with strict catalogue ID validation.
  */
 class OnDeviceProductRecognizer(
     private val context: Context,
@@ -32,6 +36,7 @@ class OnDeviceProductRecognizer(
     private val connectivityChecker: ConnectivityChecker? = null,
     private val telemetryStore: RecognitionTelemetryStore = RecognitionTelemetryStore(context),
     private val cloudGateway: CloudRecognitionGateway = CloudProductRecognitionClient(telemetryStore),
+    private val inferenceEngine: OnDeviceModelInferenceEngine = repository.inferenceEngine,
     private val onCorrectionQueued: () -> Unit = {},
 ) {
     private val learningRepository by lazy {
@@ -47,15 +52,29 @@ class OnDeviceProductRecognizer(
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
+    private data class LocalCaptureSignals(
+        val ocrText: String,
+        val decodedBarcodes: List<String>,
+        val visualEmbedding: FloatArray?,
+    )
+
     suspend fun recognizeOffline(capture: PreparedCaptureResult): RecognitionOutcome =
         withContext(Dispatchers.IO) {
             repository.ensureDiskIndexLoaded()
-            val ocrText = extractOcrText(capture.recognitionCopyPath)
+            val signals = extractCaptureSignals(capture.recognitionCopyPath)
 
             val productDao = database.productDao()
             val activeEntities = productDao.getActiveProducts()
             val productsById = activeEntities
-                .map(CatalogueDeltaCalculator::toProductIdentity)
+                .map { entity ->
+                    val base = CatalogueDeltaCalculator.toProductIdentity(entity)
+                    val refEntry = repository.referenceIndex.getByProductId(entity.id)
+                    if (refEntry != null) {
+                        base.copy(sku = refEntry.sku, barcode = refEntry.barcode)
+                    } else {
+                        base
+                    }
+                }
                 .associateBy { it.id }
 
             if (repository.referenceIndex.getActiveEntries().isEmpty() && productsById.isNotEmpty()) {
@@ -74,17 +93,44 @@ class OnDeviceProductRecognizer(
             }
 
             val projectionsById = productDao.getAllStockProjections().associateBy { it.productId }
-            val cachedPhotosById = loadCachedPhotoPaths(activeEntities.map { it.id })
+            val productIds = activeEntities.map { it.id }
+            val cachedPhotosById = loadCachedPhotoPaths(productIds)
+
+            // Load precomputed embeddings and fill any missing vectors from already-cached reference photos
+            val expectedDim = if (inferenceEngine.isReady) inferenceEngine.embeddingDimension else null
+            val embeddingsById = repository.embeddingCache
+                .loadAllEmbeddings(productIds, expectedDim)
+                .toMutableMap()
+
+            if (inferenceEngine.isReady) {
+                var computedNow = 0
+                for ((pid, localPath) in cachedPhotosById) {
+                    if (computedNow >= MAX_LAZY_EMBEDDINGS_PER_SCAN) break
+                    if (localPath.isNullOrBlank() || embeddingsById.containsKey(pid)) continue
+                    val refBitmap = ImageQualityMath.decodeUprightBitmap(File(localPath), 640) ?: continue
+                    try {
+                        inferenceEngine.extractVisualFeatureEmbeddingOrNull(refBitmap)?.let { vec ->
+                            embeddingsById[pid] = repository.embeddingCache.saveEmbedding(pid, vec)
+                            computedNow++
+                        }
+                    } finally {
+                        if (!refBitmap.isRecycled) refBitmap.recycle()
+                    }
+                }
+            }
 
             val localOutcome = RecognitionRanker.rankCandidates(
                 captureId = capture.captureId,
                 preservedPhotoPath = capture.originalPath,
                 captureDHashHex = capture.dHashHex,
-                ocrText = ocrText,
+                ocrText = signals.ocrText,
                 activeEntries = repository.referenceIndex.getActiveEntries(),
                 productsById = productsById,
                 projectionsById = projectionsById,
                 cachedPhotoPathsById = cachedPhotosById,
+                captureEmbedding = signals.visualEmbedding,
+                embeddingsByProductId = embeddingsById,
+                decodedBarcodes = signals.decodedBarcodes,
             )
             telemetryStore.recordLocalOutcome(localOutcome.status)
 
@@ -193,8 +239,8 @@ class OnDeviceProductRecognizer(
 
     /**
      * Stage 1.6 (Action 1.6.1): Records human-confirmed selections/corrections,
-     * updates aliases + visual signature + local reference index, logs audit trail,
-     * and queues approved reference updates for sync. Never learns from unconfirmed guesses.
+     * updates aliases + visual signature + TFLite embedding + local reference index,
+     * logs audit trail, and queues approved reference updates for sync.
      */
     suspend fun recordConfirmedSelection(
         outcome: RecognitionOutcome?,
@@ -227,25 +273,37 @@ class OnDeviceProductRecognizer(
         return map
     }
 
-    private suspend fun extractOcrText(imagePath: String): String {
+    private suspend fun extractCaptureSignals(imagePath: String): LocalCaptureSignals {
         val file = File(imagePath)
-        if (!file.exists()) return ""
-        val bitmap = ImageQualityMath.decodeUprightBitmap(file, 960) ?: return ""
+        if (!file.exists()) return LocalCaptureSignals("", emptyList(), null)
+        val bitmap = ImageQualityMath.decodeUprightBitmap(file, 960)
+            ?: return LocalCaptureSignals("", emptyList(), null)
         return try {
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            suspendCancellableCoroutine { cont ->
-                textRecognizer.process(inputImage)
-                    .addOnSuccessListener { visionText ->
-                        if (cont.isActive) cont.resume(visionText.text.orEmpty())
-                    }
-                    .addOnFailureListener {
-                        if (cont.isActive) cont.resume("")
-                    }
-            }
-        } catch (_: Exception) {
-            ""
+            val visualEmbedding = inferenceEngine.extractVisualFeatureEmbeddingOrNull(bitmap)
+            val barcodes = runCatching { BarcodeDecoder.decodeBarcodes(bitmap) }.getOrDefault(emptyList())
+            val ocrText = runCatching {
+                val inputImage = InputImage.fromBitmap(bitmap, 0)
+                suspendCancellableCoroutine { cont ->
+                    textRecognizer.process(inputImage)
+                        .addOnSuccessListener { visionText ->
+                            if (cont.isActive) cont.resume(visionText.text.orEmpty())
+                        }
+                        .addOnFailureListener {
+                            if (cont.isActive) cont.resume("")
+                        }
+                }
+            }.getOrDefault("")
+            LocalCaptureSignals(
+                ocrText = ocrText,
+                decodedBarcodes = barcodes,
+                visualEmbedding = visualEmbedding,
+            )
         } finally {
-            bitmap.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
         }
+    }
+
+    companion object {
+        private const val MAX_LAZY_EMBEDDINGS_PER_SCAN = 16
     }
 }

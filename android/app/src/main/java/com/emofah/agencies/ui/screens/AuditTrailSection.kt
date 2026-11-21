@@ -124,31 +124,19 @@ fun LazyListScope.auditTrailItems(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(
-                        imageVector = if (canInspectFullStoreAudit) {
-                            Icons.Outlined.Security
-                        } else {
-                            Icons.Outlined.Lock
-                        },
+                        imageVector = Icons.Outlined.Security,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                     )
                     Text(
-                        text = if (canInspectFullStoreAudit) {
-                            "Full Accountability Ledger (${staffRole.label})"
-                        } else {
-                            "My Device Audit Trail (${staffRole.label})"
-                        },
+                        text = "Full Accountability Ledger",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = colors.textPrimary,
                     )
                 }
                 Text(
-                    text = if (canInspectFullStoreAudit) {
-                        "Append-only audit records preserve before/after values, actor, device, timestamp, and reasons. Entries cannot be edited or deleted."
-                    } else {
-                        "Showing actions attributed to $currentActorId. Store-wide cross-staff audit inspection requires Supervisor or Owner/Manager sign-in."
-                    },
+                    text = "Append-only audit records preserve before/after values, actor, device, timestamp, and reasons. Entries cannot be edited or deleted.",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textMuted,
                 )
@@ -331,11 +319,7 @@ fun AuditTrailSection(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         EmofahCard {
             Text(
-                text = if (canInspectFullStoreAudit) {
-                    "Full Accountability Ledger (${staffRole.label})"
-                } else {
-                    "My Device Audit Trail (${staffRole.label})"
-                },
+                text = "Full Accountability Ledger",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
             )

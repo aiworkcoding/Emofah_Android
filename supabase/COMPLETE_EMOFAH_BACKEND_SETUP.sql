@@ -4584,5 +4584,147 @@ $$;
 REVOKE ALL ON FUNCTION public.get_android_audit_events(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_android_audit_events(integer) TO authenticated, service_role;
 
+-- -----------------------------------------------------------------------------
+-- SECTION 18 of 18: supabase/migrations/20261121_remove_staff_restrictions.sql
+-- -----------------------------------------------------------------------------
+-- Removes staff-profile/role restrictions and deactivation lockouts so every
+-- staff user can perform all Emofah operations while preserving audit attribution.
+
+CREATE OR REPLACE FUNCTION public.is_initial_admin_bootstrap_needed()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+    SELECT false;
+$$;
+
+REVOKE ALL ON FUNCTION public.is_initial_admin_bootstrap_needed() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_initial_admin_bootstrap_needed() TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.resolve_android_effective_role()
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+BEGIN
+    IF auth.uid() IS NULL THEN
+        RETURN 'UNAUTHENTICATED';
+    END IF;
+    RETURN 'OWNER_MANAGER';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.resolve_android_effective_role() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.resolve_android_effective_role() TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_my_android_staff_profile()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+DECLARE
+    v_uid uuid;
+    v_row public.android_staff_roles%ROWTYPE;
+    v_email text;
+    v_full_name text;
+BEGIN
+    v_uid := auth.uid();
+    IF v_uid IS NULL THEN
+        RETURN jsonb_build_object(
+            'authenticated', false,
+            'staff_role', 'OWNER_MANAGER',
+            'is_active', true,
+            'bootstrap_needed', false,
+            'capabilities', jsonb_build_object(
+                'can_override_price', true,
+                'can_reverse_sale', true,
+                'can_adjust_stock', true,
+                'can_submit_stock_count', true,
+                'can_resolve_conflicts', true,
+                'can_manage_security', true
+            )
+        );
+    END IF;
+
+    SELECT * INTO v_row FROM public.android_staff_roles WHERE user_id = v_uid LIMIT 1;
+    v_email := COALESCE(v_row.email, auth.jwt() ->> 'email', '');
+    v_full_name := COALESCE(v_row.full_name, auth.jwt() -> 'user_metadata' ->> 'full_name', v_email);
+
+    RETURN jsonb_build_object(
+        'authenticated', true,
+        'user_id', v_uid::text,
+        'email', v_email,
+        'full_name', v_full_name,
+        'staff_role', 'OWNER_MANAGER',
+        'is_active', true,
+        'bootstrap_needed', false,
+        'capabilities', jsonb_build_object(
+            'can_override_price', true,
+            'can_reverse_sale', true,
+            'can_adjust_stock', true,
+            'can_submit_stock_count', true,
+            'can_resolve_conflicts', true,
+            'can_manage_security', true
+        )
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_my_android_staff_profile() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_my_android_staff_profile() TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_android_audit_events(
+    p_limit integer DEFAULT 100
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_bounded_limit integer;
+    v_events jsonb;
+BEGIN
+    v_bounded_limit := LEAST(GREATEST(COALESCE(p_limit, 100), 1), 300);
+
+    SELECT COALESCE(jsonb_agg(row_obj), '[]'::jsonb)
+    INTO v_events
+    FROM (
+        SELECT jsonb_build_object(
+            'audit_id', e.audit_id,
+            'actor_id', e.actor_id,
+            'actor_role', e.actor_role,
+            'device_id', e.device_id,
+            'operation', e.operation,
+            'entity_type', e.entity_type,
+            'entity_id', e.entity_id,
+            'before_json', e.before_json,
+            'after_json', e.after_json,
+            'reason', e.reason,
+            'occurred_at_epoch_ms', (extract(epoch FROM e.occurred_at) * 1000)::bigint,
+            'synced_at', e.synced_at
+        ) AS row_obj
+        FROM public.android_audit_events e
+        ORDER BY e.occurred_at DESC
+        LIMIT v_bounded_limit
+    ) sub;
+
+    RETURN jsonb_build_object(
+        'status', 'OK',
+        'scope', 'STORE_WIDE',
+        'events', v_events
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_android_audit_events(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_android_audit_events(integer) TO anon, authenticated, service_role;
+
 
 

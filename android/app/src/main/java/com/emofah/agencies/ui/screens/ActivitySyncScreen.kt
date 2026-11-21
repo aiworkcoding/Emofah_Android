@@ -483,24 +483,6 @@ fun ActivitySyncScreen(
                                     }
                                 }
                             }
-                            if (conflict.eventType == "SALE" && !canResolveConflictReversal) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Lock,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp),
-                                        tint = colors.textMuted,
-                                    )
-                                    Text(
-                                        text = "Local reversal requires Supervisor or Owner/Manager sign-in.",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colors.textMuted,
-                                    )
-                                }
-                            }
                         }
                     }
                 }
@@ -677,26 +659,9 @@ fun ActivitySyncScreen(
                     if (sale.isReversed) {
                         EmofahFeedbackBanner(
                             title = "Sale Reversed (Original Preserved)",
-                            message = "Reason: ${sale.reversalReason ?: "Authorized reversal"}",
+                            message = "Reason: ${sale.reversalReason ?: "Sale reversal"}",
                             tone = EmofahBadgeTone.DANGER,
                         )
-                    } else if (!canReverseRole) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Lock,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = colors.textMuted,
-                            )
-                            Text(
-                                text = "Reversing a completed sale requires Supervisor or Owner/Manager authorization (Current role: ${staffRole.label}).",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = colors.textMuted,
-                            )
-                        }
                     } else if (showReversalForm) {
                         HorizontalDivider(color = colors.borderSubtle)
                         Text(

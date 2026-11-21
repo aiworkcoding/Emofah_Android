@@ -39,12 +39,12 @@ class SaleSpeedAndOverrideStage23Test {
     )
 
     @Test
-    fun unauthorizedCashierCannotOverrideRegisteredPrice() {
-        assertFalse(PriceOverridePolicy.canOverridePrice(StaffRole.CASHIER))
+    fun allStaffIncludingCashierCanOverridePriceWithValidReason() {
+        assertTrue(PriceOverridePolicy.canOverridePrice(StaffRole.CASHIER))
         assertTrue(PriceOverridePolicy.canOverridePrice(StaffRole.SUPERVISOR))
         assertTrue(PriceOverridePolicy.canOverridePrice(StaffRole.OWNER_MANAGER))
 
-        val cashierBlocked = SaleCalculator.validateAndCalculate(
+        val cashierOverride = SaleCalculator.validateAndCalculate(
             product = sampleProduct(),
             stockProjection = null,
             rawQuantity = 2,
@@ -52,10 +52,11 @@ class SaleSpeedAndOverrideStage23Test {
             overrideReason = "Bulk discount",
             staffRole = StaffRole.CASHIER,
         )
-        assertFalse(cashierBlocked.isValidToRecord)
-        assertTrue(cashierBlocked.blockingReason!!.contains("Supervisor", ignoreCase = true))
+        assertTrue(cashierOverride.isValidToRecord)
+        assertTrue(cashierOverride.isPriceOverridden)
+        assertEquals(240.0, cashierOverride.totalAmount, 0.001)
 
-        // Unchanged price remains valid even for Cashier
+        // Unchanged price remains valid without an override reason
         val cashierNormal = SaleCalculator.validateAndCalculate(
             product = sampleProduct(),
             stockProjection = null,

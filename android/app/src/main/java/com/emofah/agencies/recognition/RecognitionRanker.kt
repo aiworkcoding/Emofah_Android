@@ -6,9 +6,13 @@ import com.emofah.agencies.data.local.entities.LocalStockProjectionEntity
 import kotlin.math.max
 
 /**
- * Stage 1.3 (Actions 1.3.1 & 1.3.2):
- * Pure, deterministic on-device candidate ranker combining visual dHash similarity
- * and ML Kit OCR text evidence against the local Emofah catalogue index.
+ * Stage 1.3 (Actions 1.3.1 & 1.3.2) + Embedded Vision Fusion:
+ * Pure, deterministic on-device candidate ranker combining:
+ * - TFLite vision feature embeddings (MobileNetV3-Small cosine similarity)
+ * - Perceptual dHash visual similarity
+ * - Offline ZXing barcode & SKU exact matching
+ * - ML Kit OCR packaging text & confirmed alias matching
+ *
  * Never fabricates product IDs and never auto-commits uncertain matches.
  */
 enum class MatchConfidenceStatus {
@@ -56,9 +60,13 @@ object RecognitionRanker {
         projectionsById: Map<Long, LocalStockProjectionEntity>,
         cachedPhotoPathsById: Map<Long, String?>,
         maxCandidates: Int = 5,
+        captureEmbedding: FloatArray? = null,
+        embeddingsByProductId: Map<Long, FloatArray> = emptyMap(),
+        decodedBarcodes: List<String> = emptyList(),
     ): RecognitionOutcome {
         val normalizedOcr = normalizeText(ocrText)
         val ocrTokens = tokenize(normalizedOcr)
+        val compactCodes = buildCompactCodeSet(decodedBarcodes, ocrText)
 
         val scored = mutableListOf<RecognitionCandidate>()
 
@@ -66,18 +74,54 @@ object RecognitionRanker {
             if (entry.isArchived) continue
             val product = productsById[entry.productId] ?: continue
 
-            val visualSim = if (!captureDHashHex.isNullOrBlank() && !entry.visualSignatureHex.isNullOrBlank()) {
+            val dHashSim = if (!captureDHashHex.isNullOrBlank() && !entry.visualSignatureHex.isNullOrBlank()) {
                 dHashSimilarity(captureDHashHex, entry.visualSignatureHex)
             } else {
                 null
             }
 
+            val refEmbedding = embeddingsByProductId[entry.productId]
+            val rawEmbeddingCosine = if (captureEmbedding != null && refEmbedding != null && captureEmbedding.size == refEmbedding.size) {
+                EmbeddingCacheStore.cosineSimilarity(captureEmbedding, refEmbedding)
+            } else {
+                null
+            }
+            val embeddingSim = rawEmbeddingCosine?.let { calibrateEmbeddingSimilarity(it) }
+
+            val combinedVisualSim = when {
+                embeddingSim != null && dHashSim != null ->
+                    (0.78 * embeddingSim + 0.22 * dHashSim).coerceIn(0.0, 1.0)
+                embeddingSim != null -> embeddingSim
+                else -> dHashSim
+            }
+
+            val entryBarcode = (entry.barcode ?: product.barcode)?.trim().orEmpty()
+            val entrySku = (entry.sku ?: product.sku)?.trim().orEmpty()
+            val matchedBarcode = entryBarcode.isNotEmpty() &&
+                compactCodes.any { it.equals(compactCode(entryBarcode), ignoreCase = true) }
+            val matchedSku = entrySku.isNotEmpty() &&
+                compactCodes.any { it.equals(compactCode(entrySku), ignoreCase = true) }
+
             val textResult = scoreTextMatch(normalizedOcr, ocrTokens, entry)
-            val combinedScore = combineEvidence(visualSim, textResult.score)
+            val baseCombined = combineEvidence(
+                visualSim = combinedVisualSim,
+                dHashFallbackSim = dHashSim,
+                hasEmbeddingSignal = embeddingSim != null,
+                textScore = textResult.score,
+            )
+            val barcodeFloor = when {
+                matchedBarcode -> 0.94
+                matchedSku -> 0.90
+                else -> 0.0
+            }
+            val combinedScore = max(baseCombined, barcodeFloor)
 
             if (combinedScore >= MINIMUM_CANDIDATE_THRESHOLD) {
                 val reasons = buildList {
-                    if (visualSim != null && visualSim >= 0.72) add("Visual match")
+                    if (matchedBarcode) add("Barcode match")
+                    if (matchedSku) add("SKU match")
+                    if (embeddingSim != null && embeddingSim >= 0.55) add("AI visual embedding match")
+                    if (dHashSim != null && dHashSim >= 0.72) add("Visual match")
                     if (textResult.matchedAlias) add("Confirmed alias match")
                     if (textResult.matchedVariant) add("Variant match")
                     if (textResult.tokenHits > 0) add("Packaging text match")
@@ -147,6 +191,15 @@ object RecognitionRanker {
         }
     }
 
+    /**
+     * Rescales raw L2-normalized MobileNetV3 cosine similarity so random unrelated
+     * pairs (~0.20..0.42 cosine) drop cleanly below candidate threshold while genuine
+     * same-product photos across angles/lighting (~0.60..0.99 cosine) rank prominently.
+     */
+    fun calibrateEmbeddingSimilarity(rawCosine: Double): Double {
+        return ((rawCosine - 0.35) / 0.65).coerceIn(0.0, 1.0)
+    }
+
     private data class TextMatchScore(
         val score: Double,
         val tokenHits: Int,
@@ -199,13 +252,42 @@ object RecognitionRanker {
         )
     }
 
-    private fun combineEvidence(visualSim: Double?, textScore: Double): Double {
+    private fun combineEvidence(
+        visualSim: Double?,
+        dHashFallbackSim: Double?,
+        hasEmbeddingSignal: Boolean,
+        textScore: Double,
+    ): Double {
         return when {
-            visualSim != null && textScore > 0.0 -> (0.45 * visualSim + 0.55 * textScore).coerceIn(0.0, 1.0)
-            visualSim != null -> (visualSim * 0.85).coerceIn(0.0, 1.0)
+            visualSim != null && textScore > 0.0 -> {
+                val weighted = 0.50 * visualSim + 0.50 * textScore
+                if (hasEmbeddingSignal) max(weighted, visualSim * 0.90).coerceIn(0.0, 1.0)
+                else (0.45 * (dHashFallbackSim ?: visualSim) + 0.55 * textScore).coerceIn(0.0, 1.0)
+            }
+            visualSim != null -> {
+                if (hasEmbeddingSignal) (visualSim * 0.92).coerceIn(0.0, 1.0)
+                else (visualSim * 0.85).coerceIn(0.0, 1.0)
+            }
             else -> textScore
         }
     }
+
+    private fun buildCompactCodeSet(decodedBarcodes: List<String>, ocrText: String): Set<String> {
+        val codes = linkedSetOf<String>()
+        for (bc in decodedBarcodes) {
+            val clean = compactCode(bc)
+            if (clean.length >= 3) codes.add(clean)
+        }
+        val ocrWords = ocrText.split(Regex("""\s+"""))
+        for (word in ocrWords) {
+            val clean = compactCode(word)
+            if (clean.length >= 4) codes.add(clean)
+        }
+        return codes
+    }
+
+    private fun compactCode(raw: String): String =
+        raw.replace(Regex("""[^A-Za-z0-9]"""), "").uppercase()
 
     private fun normalizeText(input: String): String {
         return NON_ALNUM.replace(input.lowercase(), " ")

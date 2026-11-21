@@ -54,7 +54,7 @@ const ANDROID_MODULES: {
     label: 'Scan',
     shortLabel: 'Scan',
     icon: Camera,
-    stageNote: 'Stage 1.2–1.6: CameraX capture, local OCR/dHash, cloud fallback, registration & confirmed learning.',
+    stageNote: 'Embedded MobileNetV3 TFLite Vision AI, barcode, ML Kit OCR & dHash product identification offline.',
     inBottomBar: true,
   },
   {
@@ -62,7 +62,7 @@ const ANDROID_MODULES: {
     label: 'Record Sale',
     shortLabel: 'Sale',
     icon: ShoppingCart,
-    stageNote: 'Stage 2.1–2.3: Rapid checkout, persisted payment choice & authorized price overrides.',
+    stageNote: 'Rapid checkout, persisted payment choice & unrestricted price adjustments with reason tracking.',
     inBottomBar: true,
   },
   {
@@ -134,13 +134,13 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
           <div className="space-y-3 max-w-2xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#14558a]/10 dark:bg-[#43b1d4]/15 text-[#14558a] dark:text-[#43b1d4] text-xs font-semibold">
               <Smartphone className="w-3.5 h-3.5" />
-              <span>Stage 5.3 · Native Kotlin + Jetpack Compose · M-Pesa Parser &amp; Validation</span>
+              <span>Native Kotlin + Jetpack Compose · Bundled TFLite Vision AI &amp; Offline Receipt OCR</span>
             </div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#103c60] dark:text-[#f1f5f9] tracking-tight">
               Emofah Native Android Companion &amp; Preview
             </h1>
             <p className="text-sm sm:text-base text-[#475569] dark:text-[#cbd5e1] leading-relaxed">
-              The native Android app lives in <code className="font-mono text-xs px-1.5 py-0.5 rounded bg-[#103c60]/10 dark:bg-[#43b1d4]/15">/android</code> (Kotlin, Jetpack Compose Material 3, package <code className="font-mono text-xs px-1.5 py-0.5 rounded bg-[#103c60]/10 dark:bg-[#43b1d4]/15">com.emofah.agencies</code>). Because AI Studio runs in a browser container without Android SDK/JDK, use the interactive phone preview beside it to inspect the UI shell, and compile the real <code className="font-mono text-xs">.apk</code> via GitHub Actions or Android Studio.
+              The native Android app lives in <code className="font-mono text-xs px-1.5 py-0.5 rounded bg-[#103c60]/10 dark:bg-[#43b1d4]/15">/android</code> (Kotlin, Jetpack Compose Material 3, package <code className="font-mono text-xs px-1.5 py-0.5 rounded bg-[#103c60]/10 dark:bg-[#43b1d4]/15">com.emofah.agencies</code>) with the bundled <code className="font-mono text-xs">emofah_vision_model.tflite</code> weights inside the APK, local receipt layout parsing, and pre-configured Supabase credentials. Use the interactive preview alongside to inspect screens, or build <code className="font-mono text-xs">app-debug.apk</code> directly from <code className="font-mono text-xs">/android</code>.
             </p>
           </div>
         </div>
@@ -1074,8 +1074,7 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                   <span>Option B — Android Studio / Local CLI</span>
                 </div>
                 <pre className="text-[11px] font-mono bg-[#060d18] text-[#e2e8f0] p-3 rounded-xl overflow-x-auto leading-relaxed">
-{`cp android/local.properties.example android/local.properties
-# Add sdk.dir + SUPABASE_URL + SUPABASE_ANON_KEY
+{`# Supabase URL & anon key are pre-configured in build.gradle.kts
 cd android
 ./gradlew testDebugUnitTest assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk`}

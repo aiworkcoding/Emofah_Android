@@ -48,6 +48,11 @@ data class PurchaseReceiptDraft(
     val invoiceRef: String = "",
     val receiptDateText: String = "",
     val extractedTotal: Double = 0.0,
+    val subtotalAmount: Double = 0.0,
+    val discountAmount: Double = 0.0,
+    val taxAmount: Double = 0.0,
+    val paymentMethod: String = "",
+    val paymentReference: String = "",
     val lines: List<ExtractedReceiptLineDraft> = emptyList(),
     val rawOcrText: String = "",
     val photoPath: String? = null,
@@ -59,7 +64,7 @@ data class PurchaseReceiptDraft(
         get() = lines.sumOf { it.effectiveLineTotal }
 
     val effectiveTotal: Double
-        get() = if (extractedTotal > 0.0) extractedTotal else computedLinesTotal
+        get() = if (extractedTotal > 0.0) extractedTotal else (computedLinesTotal - discountAmount + taxAmount).coerceAtLeast(0.0)
 }
 
 data class ReceiptValidationResult(
@@ -211,127 +216,15 @@ sealed class PurchaseSubmissionResult {
  * without inventing unprinted numbers, and marks every draft unconfirmed for human review.
  */
 object ReceiptOcrParser {
-    private val TOTAL_LINE_REGEX = Regex(
-        """(?:grand\s+total|total\s+due|net\s+total|total)\s*[:\-]?\s*(?:ksh|kes)?\.?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val INVOICE_REF_REGEX = Regex(
-        """(?:receipt|invoice|inv|rcpt|ref|serial)\s*(?:no\.?|#|id)?\s*[:\-]?\s*([A-Z0-9\-\/]{3,24})""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val DATE_REGEX = Regex("""\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}-\d{2}-\d{2})\b""")
-    private val QTY_PREFIX_ITEM_REGEX = Regex(
-        """^(\d{1,4})\s*[xX*]?\s+([A-Za-z][A-Za-z0-9\s.&'\/\-]{2,48}?)\s+(?:ksh|kes)?\.?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)$""",
-        RegexOption.IGNORE_CASE,
-    )
-    private val NAME_AMT_LINE_REGEX = Regex(
-        """^([A-Za-z][A-Za-z0-9\s.&'\/\-]{2,48}?)\s+(?:(\d{1,4})\s*[xX*]?\s+@?\s*)?(?:ksh|kes)?\.?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)$""",
-        RegexOption.IGNORE_CASE,
-    )
-
-    private val NON_ITEM_KEYWORDS = listOf(
-        "subtotal", "sub-total", "vat", "tax", "total", "cash", "mpesa", "m-pesa",
-        "change", "balance", "thank you", "served by", "tel:", "pin:", "kra", "till",
-    )
-
     fun parse(
         rawOcrText: String,
         catalogueProducts: List<ProductIdentity>,
         photoPath: String? = null,
     ): PurchaseReceiptDraft {
-        val textLines = rawOcrText.lines()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-
-        val supplier = textLines.firstOrNull { line ->
-            val lower = line.lowercase()
-            line.length in 3..48 &&
-                line.any { it.isLetter() } &&
-                !lower.contains("receipt") &&
-                !lower.contains("invoice") &&
-                !lower.contains("kra") &&
-                !lower.contains("pin:") &&
-                !DATE_REGEX.containsMatchIn(line)
-        }.orEmpty()
-
-        val invoiceRef = INVOICE_REF_REGEX.find(rawOcrText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        val receiptDate = DATE_REGEX.find(rawOcrText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        val extractedTotal = TOTAL_LINE_REGEX.findAll(rawOcrText)
-            .lastOrNull()
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.replace(",", "")
-            ?.toDoubleOrNull()
-            ?: 0.0
-
-        val activeProducts = catalogueProducts.filter { !it.isArchived && it.id > 0L }
-        val extractedItems = mutableListOf<ExtractedReceiptLineDraft>()
-
-        for (line in textLines) {
-            val lower = line.lowercase()
-            if (NON_ITEM_KEYWORDS.any { lower.startsWith(it) || lower.contains(" $it ") || lower == it }) {
-                continue
-            }
-
-            val qtyFirstMatch = QTY_PREFIX_ITEM_REGEX.matchEntire(line)
-            val nameFirstMatch = if (qtyFirstMatch == null) NAME_AMT_LINE_REGEX.matchEntire(line) else null
-
-            val rawName: String
-            val qty: Int
-            val amountVal: Double
-
-            if (qtyFirstMatch != null) {
-                qty = qtyFirstMatch.groupValues[1].toIntOrNull()?.coerceAtLeast(1) ?: 1
-                rawName = qtyFirstMatch.groupValues[2].trim()
-                amountVal = qtyFirstMatch.groupValues[3].replace(",", "").toDoubleOrNull() ?: 0.0
-            } else if (nameFirstMatch != null) {
-                rawName = nameFirstMatch.groupValues[1].trim()
-                qty = nameFirstMatch.groupValues[2].toIntOrNull()?.coerceAtLeast(1) ?: 1
-                amountVal = nameFirstMatch.groupValues[3].replace(",", "").toDoubleOrNull() ?: 0.0
-            } else {
-                continue
-            }
-
-            if (rawName.length < 2 || amountVal <= 0.0) continue
-            val unitCost = if (qty > 0) (amountVal / qty) else amountVal
-            val category = inferCategoryHint(rawName)
-            val matchedProduct = if (category == PurchaseItemCategory.RESALE_PRODUCT) {
-                findBestCatalogMatch(rawName, activeProducts)
-            } else {
-                null
-            }
-
-            extractedItems += ExtractedReceiptLineDraft(
-                rawName = rawName,
-                matchedProductId = matchedProduct?.id,
-                matchedProductName = matchedProduct?.name,
-                itemCategory = category,
-                quantity = qty,
-                unitCost = unitCost,
-                lineTotal = amountVal,
-                registerAsNewProduct = false,
-                confidenceNote = "Extracted offline via OCR — verify qty & cost",
-            )
-        }
-
-        val warnings = mutableListOf(
-            "OCR/AI draft requires human verification before saving."
-        )
-        if (extractedItems.isEmpty()) {
-            warnings += "No clear line items detected automatically; add or edit items below."
-        }
-
-        return PurchaseReceiptDraft(
-            supplierName = supplier,
-            invoiceRef = invoiceRef,
-            receiptDateText = receiptDate,
-            extractedTotal = extractedTotal,
-            lines = extractedItems,
+        return ReceiptLayoutParser.parseRawText(
             rawOcrText = rawOcrText,
+            catalogueProducts = catalogueProducts,
             photoPath = photoPath,
-            extractionSource = ReceiptExtractionSource.OFFLINE_OCR,
-            warnings = warnings,
-            isHumanConfirmed = false,
         )
     }
 
@@ -349,25 +242,5 @@ object ReceiptOcrParser {
     internal fun findBestCatalogMatch(
         rawName: String,
         catalogue: List<ProductIdentity>,
-    ): ProductIdentity? {
-        val tokens = rawName.lowercase()
-            .split(Regex("""\s+"""))
-            .map { it.trim() }
-            .filter { it.length >= 3 }
-        if (tokens.isEmpty()) return null
-
-        var best: ProductIdentity? = null
-        var bestScore = 0.0
-        for (prod in catalogue) {
-            val hay = "${prod.name} ${prod.baseName} ${prod.variantLabel.orEmpty()} ${prod.brandHint.orEmpty()}".lowercase()
-            val hits = tokens.count { hay.contains(it) }
-            if (hits == 0) continue
-            val score = hits.toDouble() / tokens.size.toDouble()
-            if (score > bestScore && score >= 0.5) {
-                bestScore = score
-                best = prod
-            }
-        }
-        return best
-    }
+    ): ProductIdentity? = ReceiptLayoutParser.findConservativeCatalogMatch(rawName, catalogue)
 }

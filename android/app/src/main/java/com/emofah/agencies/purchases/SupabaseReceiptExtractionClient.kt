@@ -30,10 +30,13 @@ interface ReceiptExtractionGateway {
 }
 
 /**
- * Section 2 (Part 1):
- * Extracts supplier, receipt reference, line items, quantities, unit costs, and totals
- * using local ML Kit OCR plus optional online Gemini-powered `extract-receipt` Edge Function.
- * Always produces an unconfirmed PurchaseReceiptDraft (`isHumanConfirmed = false`).
+ * Local-first receipt & supplier invoice recognition engine:
+ * 1. Corrects EXIF orientation and enhances paper/thermal ink contrast via [ReceiptImageEnhancer].
+ * 2. Extracts ML Kit text together with 2D bounding boxes ([OcrSpatialLine]).
+ * 3. Structures supplier, invoice ref, date, payment details, multi-column line items,
+ *    discounts, VAT/tax, subtotal, and grand total locally via [ReceiptLayoutParser].
+ * 4. Flags arithmetic discrepancies without mutating extracted values via [ReceiptArithmeticValidator].
+ * 5. Always marks drafts unconfirmed (`isHumanConfirmed = false`) for staff verification.
  */
 class SupabaseReceiptExtractionClient(
     private val endpointUrl: String = SupabaseConfig.receiptExtractionEndpoint,
@@ -44,6 +47,11 @@ class SupabaseReceiptExtractionClient(
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
+    private data class LocalOcrCapture(
+        val rawText: String,
+        val spatialLines: List<OcrSpatialLine>,
+    )
+
     override suspend fun extractReceipt(
         capture: PreparedCaptureResult,
         catalogueProducts: List<ProductIdentity>,
@@ -51,61 +59,85 @@ class SupabaseReceiptExtractionClient(
     ): PurchaseReceiptDraft = withContext(Dispatchers.IO) {
         val imagePath = File(capture.originalPath).takeIf { it.exists() }?.absolutePath
             ?: capture.recognitionCopyPath
-        val rawOcrText = runLocalOcr(imagePath)
+        val localOcr = runLocalSpatialOcr(imagePath)
 
-        if (isOnline && endpointUrl.isNotBlank()) {
+        val localDraft = if (localOcr.spatialLines.isNotEmpty()) {
+            ReceiptLayoutParser.parseSpatialLines(
+                spatialLines = localOcr.spatialLines,
+                catalogueProducts = catalogueProducts,
+                photoPath = imagePath,
+            )
+        } else {
+            ReceiptLayoutParser.parseRawText(
+                rawOcrText = localOcr.rawText,
+                catalogueProducts = catalogueProducts,
+                photoPath = imagePath,
+            )
+        }
+
+        // Only try optional cloud enhancement if online, configured, AND local parser didn't already extract items cleanly
+        if (isOnline && endpointUrl.isNotBlank() && localDraft.lines.isEmpty()) {
             val base64Jpeg = encodeReceiptJpegBase64(imagePath)
-            if (base64Jpeg != null || rawOcrText.isNotBlank()) {
+            if (base64Jpeg != null || localOcr.rawText.isNotBlank()) {
                 val aiOutcome = callExtractReceiptEdge(
                     imageBase64 = base64Jpeg.orEmpty(),
-                    ocrText = rawOcrText,
+                    ocrText = localDraft.rawOcrText,
                     catalogueProducts = catalogueProducts,
                     photoPath = imagePath,
                 )
                 if (aiOutcome.isSuccess) {
-                    return@withContext aiOutcome.getOrThrow()
+                    val cloudDraft = aiOutcome.getOrThrow()
+                    val arithmetic = ReceiptArithmeticValidator.validate(cloudDraft)
+                    return@withContext if (arithmetic.hasDiscrepancies) {
+                        cloudDraft.copy(warnings = (cloudDraft.warnings + arithmetic.warnings).distinct())
+                    } else {
+                        cloudDraft
+                    }
                 }
-                val offlineFallback = ReceiptOcrParser.parse(
-                    rawOcrText = rawOcrText,
-                    catalogueProducts = catalogueProducts,
-                    photoPath = imagePath,
-                )
-                val errMsg = aiOutcome.exceptionOrNull()?.message ?: "Cloud extraction unavailable"
-                return@withContext offlineFallback.copy(
-                    warnings = (listOf("AI receipt extraction fell back to offline OCR: $errMsg") + offlineFallback.warnings).distinct(),
-                )
             }
         }
 
-        val offlineDraft = ReceiptOcrParser.parse(
-            rawOcrText = rawOcrText,
-            catalogueProducts = catalogueProducts,
-            photoPath = imagePath,
-        )
         if (!isOnline) {
-            offlineDraft.copy(
-                warnings = (listOf("Offline mode: extracted using on-device OCR only. Please verify every line.") + offlineDraft.warnings).distinct(),
+            localDraft.copy(
+                warnings = (listOf("Offline mode: extracted on-device. Verify items and totals before saving.") + localDraft.warnings).distinct(),
             )
         } else {
-            offlineDraft
+            localDraft
         }
     }
 
-    private suspend fun runLocalOcr(imagePath: String): String {
-        val bitmap = ImageQualityMath.decodeUprightBitmap(File(imagePath), 1600) ?: return ""
+    private suspend fun runLocalSpatialOcr(imagePath: String): LocalOcrCapture {
+        val bitmap = ImageQualityMath.decodeUprightBitmap(File(imagePath), 1280)
+            ?: return LocalOcrCapture("", emptyList())
+        val enhanced = runCatching { ReceiptImageEnhancer.enhanceForOcr(bitmap) }.getOrElse { bitmap }
         return try {
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
+            val inputImage = InputImage.fromBitmap(enhanced, 0)
             suspendCancellableCoroutine { cont ->
                 textRecognizer.process(inputImage)
-                    .addOnSuccessListener { text ->
-                        if (cont.isActive) cont.resume(text.text.orEmpty())
+                    .addOnSuccessListener { visionText ->
+                        val spatial = visionText.textBlocks.flatMap { block ->
+                            block.lines.mapNotNull { line ->
+                                val box = line.boundingBox ?: return@mapNotNull null
+                                OcrSpatialLine(
+                                    text = line.text,
+                                    left = box.left,
+                                    top = box.top,
+                                    right = box.right,
+                                    bottom = box.bottom,
+                                )
+                            }
+                        }
+                        if (cont.isActive) {
+                            cont.resume(LocalOcrCapture(visionText.text.orEmpty(), spatial))
+                        }
                     }
                     .addOnFailureListener {
-                        if (cont.isActive) cont.resume("")
+                        if (cont.isActive) cont.resume(LocalOcrCapture("", emptyList()))
                     }
             }
         } finally {
-            bitmap.recycle()
+            if (enhanced !== bitmap && !enhanced.isRecycled) enhanced.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
         }
     }
 
@@ -126,8 +158,8 @@ class SupabaseReceiptExtractionClient(
         return try {
             conn = (URL(endpointUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 10_000
-                readTimeout = 25_000
+                connectTimeout = 6_000
+                readTimeout = 15_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "application/json")
@@ -283,12 +315,22 @@ class SupabaseReceiptExtractionClient(
             val invoiceRef = root.optString("invoice_ref", "").takeIf { it != "null" }.orEmpty().trim()
             val receiptDate = root.optString("receipt_date", "").takeIf { it != "null" }.orEmpty().trim()
             val totalAmount = root.optDouble("total_amount", 0.0).let { if (it.isNaN() || it < 0.0) 0.0 else it }
+            val subtotalAmount = root.optDouble("subtotal_amount", 0.0).let { if (it.isNaN() || it < 0.0) 0.0 else it }
+            val discountAmount = root.optDouble("discount_amount", 0.0).let { if (it.isNaN() || it < 0.0) 0.0 else it }
+            val taxAmount = root.optDouble("tax_amount", 0.0).let { if (it.isNaN() || it < 0.0) 0.0 else it }
+            val paymentMethod = root.optString("payment_method", "").takeIf { it != "null" }.orEmpty().trim()
+            val paymentReference = root.optString("payment_reference", "").takeIf { it != "null" }.orEmpty().trim()
 
             return PurchaseReceiptDraft(
                 supplierName = supplier,
                 invoiceRef = invoiceRef,
                 receiptDateText = receiptDate,
                 extractedTotal = totalAmount,
+                subtotalAmount = subtotalAmount,
+                discountAmount = discountAmount,
+                taxAmount = taxAmount,
+                paymentMethod = paymentMethod,
+                paymentReference = paymentReference,
                 lines = lines,
                 rawOcrText = rawOcrText,
                 photoPath = photoPath,

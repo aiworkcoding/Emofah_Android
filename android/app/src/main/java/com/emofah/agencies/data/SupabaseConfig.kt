@@ -4,12 +4,13 @@ import com.emofah.agencies.BuildConfig
 
 /**
  * Shared Emofah Supabase backend configuration.
- * Reads publishable URL and anon key from BuildConfig (populated via local.properties or CI vars).
- * Never embed service_role credentials in the Android client (Blueprint Part K & N5).
+ * Reads publishable URL, anon key, and public product-images storage base URL from BuildConfig.
+ * Never embed service_role credentials in the Android client.
  */
 object SupabaseConfig {
     val url: String = BuildConfig.SUPABASE_URL
     val anonKey: String = BuildConfig.SUPABASE_ANON_KEY
+    val publicStorageBaseUrl: String = BuildConfig.PUBLIC_STORAGE_BASE_URL
     val customCloudRecognitionUrl: String = BuildConfig.CLOUD_RECOGNITION_URL
 
     @Volatile
@@ -26,6 +27,23 @@ object SupabaseConfig {
 
     val isConfigured: Boolean
         get() = url.startsWith("https://") && anonKey.isNotBlank()
+
+    /**
+     * Resolves relative filenames stored in `public.products.image_url` against
+     * `PUBLIC_STORAGE_BASE_URL`, while keeping valid http(s) URLs intact.
+     */
+    fun normalizeProductImageUrl(rawImageUrl: String?): String? {
+        val trimmed = rawImageUrl?.trim()?.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
+            ?: return null
+        if (trimmed.startsWith("https://", ignoreCase = true) || trimmed.startsWith("http://", ignoreCase = true)) {
+            return trimmed
+        }
+        val base = publicStorageBaseUrl.trimEnd('/')
+        if (base.isBlank()) return trimmed
+        val cleanPath = trimmed.trimStart('/')
+            .removePrefix("product-images/")
+        return "$base/$cleanPath"
+    }
 
     val cloudRecognitionEndpoint: String
         get() = when {

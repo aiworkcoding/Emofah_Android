@@ -300,13 +300,6 @@ fun StaffSignInDialog(
     var otpTokenInput by remember { mutableStateOf("") }
     var otpSent by remember { mutableStateOf(false) }
 
-    var showStaffManager by remember { mutableStateOf(false) }
-    var staffList by remember { mutableStateOf<List<StaffRoleDirectoryEntry>>(emptyList()) }
-    var staffManagerMessage by remember { mutableStateOf<String?>(null) }
-    var staffManagerLoading by remember { mutableStateOf(false) }
-    var assignEmailInput by remember { mutableStateOf("") }
-    var assignRoleChoice by remember { mutableStateOf(StaffRole.CASHIER) }
-
     AlertDialog(
         onDismissRequest = {
             if (!authState.isBusy) onDismiss()
@@ -383,14 +376,14 @@ fun StaffSignInDialog(
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
-                                    text = "${authState.activeRole.label} · ${authState.status.label}",
+                                    text = "Staff Account · ${authState.status.label}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = colors.textMuted,
                                 )
                             }
                             EmofahStatusBadge(
-                                text = authState.activeRole.label,
-                                tone = EmofahBadgeTone.INFO,
+                                text = "Full Access",
+                                tone = EmofahBadgeTone.SUCCESS,
                             )
                         }
                         Text(
@@ -398,196 +391,6 @@ fun StaffSignInDialog(
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.textMuted,
                         )
-                    }
-
-                    if (authState.bootstrapNeeded && authState.activeRole != StaffRole.OWNER_MANAGER) {
-                        EmofahCard(
-                            containerColor = colors.infoContainer,
-                            borderColor = colors.info.copy(alpha = 0.25f),
-                            contentPadding = PaddingValues(12.dp),
-                        ) {
-                            Text(
-                                text = "First-Time Shop Owner Setup",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = colors.textPrimary,
-                            )
-                            Text(
-                                text = "No Owner account is set up yet. If you are the shop owner, tap below to activate Owner access on this account.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textMuted,
-                            )
-                            EmofahLoadingButton(
-                                text = "Claim Owner Access",
-                                onClick = onBootstrapInitialAdmin,
-                                enabled = isOnline && !authState.isBusy,
-                                isLoading = authState.isBusy,
-                                height = 44.dp,
-                            )
-                        }
-                    }
-
-                    if (authState.activeRole == StaffRole.OWNER_MANAGER) {
-                        HorizontalDivider(color = colors.borderSubtle)
-                        OutlinedButton(
-                            onClick = {
-                                showStaffManager = !showStaffManager
-                                if (showStaffManager && isOnline) {
-                                    staffManagerLoading = true
-                                    staffManagerMessage = null
-                                    onLoadStaffDirectory { outcome ->
-                                        staffManagerLoading = false
-                                        when (outcome) {
-                                            is StaffDirectoryOutcome.Loaded -> staffList = outcome.staff
-                                            is StaffDirectoryOutcome.Rejected -> staffManagerMessage = outcome.message
-                                            is StaffDirectoryOutcome.TransientError -> staffManagerMessage = outcome.message
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = !authState.isBusy,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (showStaffManager) "Hide Staff Access Manager" else "Manage Staff Roles")
-                        }
-
-                        if (showStaffManager) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = "Give a staff member Cashier, Supervisor, or Owner access after they sign in once with their email code.",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = colors.textMuted,
-                                )
-                                OutlinedTextField(
-                                    value = assignEmailInput,
-                                    onValueChange = { assignEmailInput = it },
-                                    label = { Text("Staff Email") },
-                                    singleLine = true,
-                                    shape = RoundedCornerShape(12.dp),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    StaffRole.entries.forEach { roleOption ->
-                                        val selected = assignRoleChoice == roleOption
-                                        if (selected) {
-                                            Button(
-                                                onClick = { assignRoleChoice = roleOption },
-                                                shape = RoundedCornerShape(10.dp),
-                                                modifier = Modifier.weight(1f),
-                                            ) {
-                                                Text(
-                                                    text = when (roleOption) {
-                                                        StaffRole.CASHIER -> "Cashier"
-                                                        StaffRole.SUPERVISOR -> "Superv."
-                                                        StaffRole.OWNER_MANAGER -> "Owner"
-                                                    },
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                )
-                                            }
-                                        } else {
-                                            OutlinedButton(
-                                                onClick = { assignRoleChoice = roleOption },
-                                                shape = RoundedCornerShape(10.dp),
-                                                modifier = Modifier.weight(1f),
-                                            ) {
-                                                Text(
-                                                    text = when (roleOption) {
-                                                        StaffRole.CASHIER -> "Cashier"
-                                                        StaffRole.SUPERVISOR -> "Superv."
-                                                        StaffRole.OWNER_MANAGER -> "Owner"
-                                                    },
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                EmofahLoadingButton(
-                                    text = "Save Staff Role",
-                                    loadingText = "Updating...",
-                                    isLoading = staffManagerLoading,
-                                    enabled = isOnline && !staffManagerLoading && assignEmailInput.contains("@"),
-                                    height = 44.dp,
-                                    onClick = {
-                                        staffManagerLoading = true
-                                        staffManagerMessage = null
-                                        onAssignStaffRole(assignEmailInput, assignRoleChoice, true) { res ->
-                                            when (res) {
-                                                is RoleUpdateOutcome.Updated -> {
-                                                    staffManagerMessage = res.message
-                                                    assignEmailInput = ""
-                                                    onLoadStaffDirectory { dir ->
-                                                        staffManagerLoading = false
-                                                        if (dir is StaffDirectoryOutcome.Loaded) {
-                                                            staffList = dir.staff
-                                                        }
-                                                    }
-                                                }
-                                                is RoleUpdateOutcome.Rejected -> {
-                                                    staffManagerLoading = false
-                                                    staffManagerMessage = res.message
-                                                }
-                                                is RoleUpdateOutcome.TransientError -> {
-                                                    staffManagerLoading = false
-                                                    staffManagerMessage = res.message
-                                                }
-                                            }
-                                        }
-                                    },
-                                )
-
-                                staffManagerMessage?.let { msg ->
-                                    Text(
-                                        text = msg,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-
-                                staffList.forEach { member ->
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = colors.surfaceElevated,
-                                        border = BorderStroke(1.dp, colors.borderSubtle),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = member.email,
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
-                                                Text(
-                                                    text = "${member.staffRole.label}${if (!member.isActive) " · Disabled" else ""}",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = colors.textMuted,
-                                                )
-                                            }
-                                            TextButton(
-                                                onClick = {
-                                                    assignEmailInput = member.email
-                                                    assignRoleChoice = member.staffRole
-                                                },
-                                            ) {
-                                                Text("Select")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 } else {
                     Text(
@@ -733,12 +536,5 @@ private fun formatRoleCapabilitiesSummary(
     role: StaffRole,
     permissions: Set<EmofahPermission>,
 ): String {
-    return when (role) {
-        StaffRole.OWNER_MANAGER ->
-            "Access (${permissions.size} permissions): Full store, price override, reversal, stock count & security access."
-        StaffRole.SUPERVISOR ->
-            "Access (${permissions.size} permissions): Sales, price overrides, reversals, stock adjustments & physical counts."
-        StaffRole.CASHIER ->
-            "Access (${permissions.size} permissions): Standard sales, stock receiving, orders & M-Pesa/financial capture."
-    }
+    return "Full store access (${permissions.size} capabilities): sales, price overrides, reversals, purchases, stock adjustments, counts, orders & audit trail."
 }

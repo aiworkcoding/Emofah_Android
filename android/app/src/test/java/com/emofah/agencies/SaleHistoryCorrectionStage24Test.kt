@@ -123,8 +123,8 @@ class SaleHistoryCorrectionStage24Test {
             role = StaffRole.CASHIER,
             reason = "Customer changed mind",
         )
-        assertFalse(cashierAttempt.isAllowed)
-        assertTrue(cashierAttempt.errorMessage.orEmpty().contains("Supervisor"))
+        assertTrue(cashierAttempt.isAllowed)
+        assertEquals("Customer changed mind", cashierAttempt.cleanReason)
 
         val blankReasonAttempt = SaleReversalPolicy.validateReversalRequest(
             sale = activeSale,

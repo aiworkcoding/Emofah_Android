@@ -110,13 +110,6 @@ object StockAdjustmentValidator {
             )
         }
 
-        // Cashiers require supervisor sign-off for discretionary adjustments
-        if (staffRole == StaffRole.CASHIER && draft.supervisorApprovedBy.isNullOrBlank()) {
-            return StockAdjustmentValidation.Invalid(
-                "Stock adjustments require Supervisor or Owner-Manager authorization."
-            )
-        }
-
         val sanitized = draft.copy(
             notes = cleanNotes,
             supervisorApprovedBy = draft.supervisorApprovedBy?.trim()?.takeIf { it.isNotBlank() },

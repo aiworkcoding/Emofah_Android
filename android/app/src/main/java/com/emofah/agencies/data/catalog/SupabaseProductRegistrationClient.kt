@@ -63,7 +63,7 @@ class SupabaseProductRegistrationClient(
     ): ProductRegistrationRpcOutcome = withContext(Dispatchers.IO) {
         if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
             return@withContext ProductRegistrationRpcOutcome.NetworkOrTransientError(
-                "Supabase credentials not configured in local.properties."
+                "Supabase configuration missing in BuildConfig."
             )
         }
 
@@ -97,7 +97,12 @@ class SupabaseProductRegistrationClient(
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
 
-            parseRpcResponse(code, body, uploadedImageUrl)
+            val outcome = parseRpcResponse(code, body, uploadedImageUrl)
+            if (outcome is ProductRegistrationRpcOutcome.RpcMissing) {
+                registerViaProductsTableFallback(request, uploadedImageUrl)
+            } else {
+                outcome
+            }
         } catch (e: IOException) {
             ProductRegistrationRpcOutcome.NetworkOrTransientError(
                 e.message ?: "Network unreachable while registering product."
@@ -108,6 +113,121 @@ class SupabaseProductRegistrationClient(
             )
         } finally {
             conn?.disconnect()
+        }
+    }
+
+    private fun registerViaProductsTableFallback(
+        request: RegisterProductRpcRequest,
+        uploadedImageUrl: String?,
+    ): ProductRegistrationRpcOutcome {
+        val cleanName = request.name.trim()
+        if (cleanName.isBlank()) {
+            return ProductRegistrationRpcOutcome.Rejected("Product name is required.")
+        }
+        val baseUrl = supabaseUrl.trimEnd('/')
+
+        // Check for existing duplicate name (case-insensitive)
+        var checkConn: HttpURLConnection? = null
+        try {
+            val encodedName = java.net.URLEncoder.encode(cleanName, "UTF-8")
+            checkConn = (URL("$baseUrl/rest/v1/products?select=id,name,qty,sell_price,image_url&name=ilike.$encodedName&limit=1").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 7_000
+                readTimeout = 10_000
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Accept", "application/json")
+            }
+            val checkCode = checkConn.responseCode
+            if (checkCode == 401 || checkCode == 403) {
+                return ProductRegistrationRpcOutcome.AuthRequired("Authentication required (HTTP $checkCode).")
+            }
+            if (checkCode in 200..299) {
+                val arr = org.json.JSONArray(checkConn.inputStream.bufferedReader().use { it.readText() })
+                if (arr.length() > 0) {
+                    val existing = arr.getJSONObject(0)
+                    return ProductRegistrationRpcOutcome.CommittedOnline(
+                        serverProductId = existing.getLong("id"),
+                        canonicalName = existing.optString("name", cleanName),
+                        qty = existing.optInt("qty", 0),
+                        sellPrice = existing.optDouble("sell_price", request.sellPrice),
+                        imageUrl = existing.optString("image_url").takeIf { it.isNotBlank() && it != "null" } ?: uploadedImageUrl,
+                        alreadyCommitted = true,
+                        matchedExistingDuplicate = true,
+                    )
+                }
+            }
+        } catch (e: IOException) {
+            return ProductRegistrationRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable.")
+        } finally {
+            checkConn?.disconnect()
+        }
+
+        // Insert new product row
+        val insertPayload = JSONObject().apply {
+            put("name", cleanName)
+            put("category", request.category.trim().ifBlank { "General" })
+            put("sell_price", request.sellPrice)
+            put("buy_price", request.buyPrice)
+            put("qty", request.initialQty.coerceAtLeast(0))
+            if (!request.description.isNullOrBlank()) {
+                put("description", request.description.trim())
+            }
+            if (!uploadedImageUrl.isNullOrBlank()) {
+                put("image_url", uploadedImageUrl)
+            }
+        }.toString()
+
+        var postConn: HttpURLConnection? = null
+        return try {
+            postConn = (URL("$baseUrl/rest/v1/products").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8_000
+                readTimeout = 12_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            postConn.outputStream.use { it.write(insertPayload.toByteArray(Charsets.UTF_8)) }
+
+            val code = postConn.responseCode
+            val stream = if (code in 200..299) postConn.inputStream else postConn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code in 200..299) {
+                val arr = org.json.JSONArray(body)
+                if (arr.length() > 0) {
+                    val row = arr.getJSONObject(0)
+                    ProductRegistrationRpcOutcome.CommittedOnline(
+                        serverProductId = row.getLong("id"),
+                        canonicalName = row.optString("name", cleanName),
+                        qty = row.optInt("qty", request.initialQty),
+                        sellPrice = row.optDouble("sell_price", request.sellPrice),
+                        imageUrl = row.optString("image_url").takeIf { it.isNotBlank() && it != "null" } ?: uploadedImageUrl,
+                        alreadyCommitted = false,
+                        matchedExistingDuplicate = false,
+                    )
+                } else {
+                    ProductRegistrationRpcOutcome.NetworkOrTransientError("Server created product without returning row.")
+                }
+            } else if (code == 401 || code == 403) {
+                ProductRegistrationRpcOutcome.AuthRequired("Authentication required (HTTP $code).")
+            } else if (code in 400..499 && code != 408 && code != 429) {
+                val msg = runCatching { JSONObject(body).optString("message") }.getOrNull()?.takeIf { it.isNotBlank() }
+                    ?: "Server rejected product creation (HTTP $code)."
+                ProductRegistrationRpcOutcome.Rejected(msg)
+            } else {
+                ProductRegistrationRpcOutcome.NetworkOrTransientError("Transient error registering product (HTTP $code).")
+            }
+        } catch (e: IOException) {
+            ProductRegistrationRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable.")
+        } catch (e: Exception) {
+            ProductRegistrationRpcOutcome.NetworkOrTransientError(e.message ?: "Unexpected error.")
+        } finally {
+            postConn?.disconnect()
         }
     }
 

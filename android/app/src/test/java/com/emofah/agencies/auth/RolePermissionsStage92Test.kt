@@ -21,44 +21,20 @@ import org.junit.Test
 class RolePermissionsStage92Test {
 
     @Test
-    fun rolePermissionPolicy_enforcesCapabilitiesPerRoleHierarchy() {
-        // Cashier can perform standard operations, blocked from privileged operations
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.RECORD_STANDARD_SALE))
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.RECEIVE_STOCK))
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.MANAGE_ORDERS))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.OVERRIDE_SALE_PRICE))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.REVERSE_SALE))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.ADJUST_STOCK))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.SUBMIT_PHYSICAL_STOCK_COUNT))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.RESOLVE_SYNC_CONFLICT_REVERSAL))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.CASHIER, EmofahPermission.MANAGE_SECURITY_SETTINGS))
-
-        // Supervisor unlocks price overrides, reversals, stock adjustments, stock counts, and local conflict reversal
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.SUPERVISOR, EmofahPermission.OVERRIDE_SALE_PRICE))
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.SUPERVISOR, EmofahPermission.REVERSE_SALE))
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.SUPERVISOR, EmofahPermission.ADJUST_STOCK))
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.SUPERVISOR, EmofahPermission.SUBMIT_PHYSICAL_STOCK_COUNT))
-        assertTrue(RolePermissionPolicy.hasPermission(StaffRole.SUPERVISOR, EmofahPermission.RESOLVE_SYNC_CONFLICT_REVERSAL))
-        assertFalse(RolePermissionPolicy.hasPermission(StaffRole.SUPERVISOR, EmofahPermission.MANAGE_SECURITY_SETTINGS))
-
-        // Owner/Manager receives all permissions
-        assertEquals(
-            EmofahPermission.entries.toSet(),
-            RolePermissionPolicy.grantedPermissions(StaffRole.OWNER_MANAGER),
-        )
-
-        val denied = RolePermissionPolicy.authorize(
-            StaffRole.CASHIER,
-            EmofahPermission.SUBMIT_PHYSICAL_STOCK_COUNT,
-        )
-        assertTrue(denied is PermissionCheckResult.Denied)
-        assertTrue((denied as PermissionCheckResult.Denied).message.contains("Supervisor"))
-
-        // Existing domain policies stay aligned with RolePermissionPolicy
-        assertFalse(PriceOverridePolicy.canOverridePrice(StaffRole.CASHIER))
-        assertTrue(PriceOverridePolicy.canOverridePrice(StaffRole.SUPERVISOR))
-        assertFalse(SaleReversalPolicy.canReverseSales(StaffRole.CASHIER))
-        assertTrue(SaleReversalPolicy.canReverseSales(StaffRole.OWNER_MANAGER))
+    fun rolePermissionPolicy_grantsFullCapabilitiesToAllStaffAndRemovesDeactivationLockout() {
+        // Every staff role has full operational access without artificial hierarchy gates
+        for (role in StaffRole.entries) {
+            assertEquals(
+                EmofahPermission.entries.toSet(),
+                RolePermissionPolicy.grantedPermissions(role),
+            )
+            for (perm in EmofahPermission.entries) {
+                assertTrue(RolePermissionPolicy.hasPermission(role, perm))
+                assertTrue(RolePermissionPolicy.authorize(role, perm) is PermissionCheckResult.Allowed)
+            }
+            assertTrue(PriceOverridePolicy.canOverridePrice(role))
+            assertTrue(SaleReversalPolicy.canReverseSales(role))
+        }
     }
 
     @Test
@@ -95,7 +71,7 @@ class RolePermissionsStage92Test {
     }
 
     @Test
-    fun serverStaffProfile_parsesAndReconcilesAuthoritativeRoleAndDeactivation() {
+    fun serverStaffProfile_parsesAndKeepsSessionActiveWithoutDeactivationLockout() {
         val activeSupervisor = ServerStaffProfile.fromJson(
             """
                 {
@@ -127,9 +103,10 @@ class RolePermissionsStage92Test {
         val elevated = RolePermissionPolicy.reconcileSessionWithServerProfile(baseSession, activeSupervisor)
         assertTrue(elevated is ServerProfileReconciliation.Active)
         val updatedSession = (elevated as ServerProfileReconciliation.Active).session
-        assertEquals(StaffRole.SUPERVISOR, updatedSession.staffRole)
+        assertEquals(StaffRole.OWNER_MANAGER, updatedSession.staffRole)
         assertEquals("Grace Mutua", updatedSession.displayName)
 
+        // Even if an old profile row has is_active=false, normal app usage is never blocked
         val disabledProfile = ServerStaffProfile.fromJson(
             """
                 {
@@ -142,9 +119,8 @@ class RolePermissionsStage92Test {
                 }
             """.trimIndent()
         )
-        val deactivated = RolePermissionPolicy.reconcileSessionWithServerProfile(baseSession, disabledProfile)
-        assertTrue(deactivated is ServerProfileReconciliation.Deactivated)
-        assertTrue((deactivated as ServerProfileReconciliation.Deactivated).message.contains("deactivated"))
+        val reconciled = RolePermissionPolicy.reconcileSessionWithServerProfile(baseSession, disabledProfile)
+        assertTrue(reconciled is ServerProfileReconciliation.Active)
 
         // Graceful null fallback when migration profile RPC isn't present yet
         val unchanged = RolePermissionPolicy.reconcileSessionWithServerProfile(baseSession, null)

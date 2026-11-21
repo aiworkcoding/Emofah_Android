@@ -37,9 +37,13 @@ android {
 
         val supabaseUrl = readConfigValue("SUPABASE_URL").ifBlank { "https://nbmmfdiqywmkjaltezro.supabase.co" }
         val supabaseAnonKey = readConfigValue("SUPABASE_ANON_KEY").ifBlank { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs" }
+        val publicStorageBaseUrl = readConfigValue("PUBLIC_STORAGE_BASE_URL").ifBlank {
+            "https://nbmmfdiqywmkjaltezro.supabase.co/storage/v1/object/public/product-images/"
+        }
         val cloudRecognitionUrl = readConfigValue("CLOUD_RECOGNITION_URL")
         buildConfigField("String", "SUPABASE_URL", "\"${escapeBuildConfigString(supabaseUrl)}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${escapeBuildConfigString(supabaseAnonKey)}\"")
+        buildConfigField("String", "PUBLIC_STORAGE_BASE_URL", "\"${escapeBuildConfigString(publicStorageBaseUrl)}\"")
         buildConfigField("String", "CLOUD_RECOGNITION_URL", "\"${escapeBuildConfigString(cloudRecognitionUrl)}\"")
     }
 
@@ -92,6 +96,10 @@ android {
         buildConfig = true
     }
 
+    androidResources {
+        noCompress += listOf("tflite")
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -128,11 +136,14 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraXVersion")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.zxing:core:3.5.3")
 
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

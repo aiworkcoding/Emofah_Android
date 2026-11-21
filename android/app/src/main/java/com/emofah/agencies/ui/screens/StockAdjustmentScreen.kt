@@ -89,7 +89,6 @@ fun StockAdjustmentScreen(
     var selectedReason by remember { mutableStateOf(StockAdjustmentReason.DAMAGED) }
     var adjustmentMagnitude by remember { mutableIntStateOf(1) }
     var notesInput by remember { mutableStateOf("") }
-    var supervisorOverrideInput by remember { mutableStateOf("") }
     var manualSearchQuery by remember { mutableStateOf("") }
     var entryMode by remember { mutableStateOf(AdjustmentEntryMode.DELTA) }
     var countedPhysicalStockInput by remember(selectedProduct?.id, stockProjection?.provisionalAvailableQty) {
@@ -474,52 +473,8 @@ fun StockAdjustmentScreen(
                 )
             }
 
-            val canAdjustDirectly = RolePermissionPolicy.hasPermission(staffRole, EmofahPermission.ADJUST_STOCK)
-            EmofahCard(
-                containerColor = if (!canAdjustDirectly) colors.dangerContainer else colors.surfaceMuted,
-                borderColor = if (!canAdjustDirectly) colors.danger.copy(alpha = 0.25f) else colors.borderSubtle,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Security,
-                        contentDescription = null,
-                        tint = if (!canAdjustDirectly) colors.danger else MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        text = if (!canAdjustDirectly) {
-                            "Supervisor Authorization Required"
-                        } else {
-                            "Authorized by Role (${staffRole.label})"
-                        },
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.textPrimary,
-                    )
-                }
-
-                if (!canAdjustDirectly) {
-                    Text(
-                        text = "Cashiers cannot authorize discretionary stock adjustments. Online sync also requires a Supervisor or Owner/Manager sign-in.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textPrimary,
-                    )
-                    OutlinedTextField(
-                        value = supervisorOverrideInput,
-                        onValueChange = { supervisorOverrideInput = it },
-                        label = { Text("Supervisor PIN or Name") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
             val isFormValid = effectiveDelta != 0 &&
-                notesInput.trim().length >= 3 &&
-                (canAdjustDirectly || supervisorOverrideInput.trim().isNotEmpty())
+                notesInput.trim().length >= 3
 
             EmofahLoadingButton(
                 text = "Apply Adjustment (${if (effectiveDelta > 0) "+$effectiveDelta" else "$effectiveDelta"} Units)",
@@ -536,7 +491,7 @@ fun StockAdjustmentScreen(
                         deltaQty = effectiveDelta,
                         reason = selectedReason,
                         notes = notesInput.trim(),
-                        supervisorApprovedBy = if (!canAdjustDirectly) supervisorOverrideInput.trim() else null,
+                        supervisorApprovedBy = null,
                     )
                     onSubmitAdjustment(draft)
                 },

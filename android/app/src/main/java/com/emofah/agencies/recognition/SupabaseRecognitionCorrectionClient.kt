@@ -62,7 +62,7 @@ class SupabaseRecognitionCorrectionClient(
     ): RecognitionCorrectionRpcOutcome = withContext(Dispatchers.IO) {
         if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
             return@withContext RecognitionCorrectionRpcOutcome.NetworkOrTransientError(
-                "Supabase credentials not configured in local.properties."
+                "Supabase configuration missing in BuildConfig."
             )
         }
 

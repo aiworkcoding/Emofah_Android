@@ -1836,7 +1836,7 @@ fun EmofahAppShell(
                                 eventId = conflict.eventId,
                                 actorId = identityProvider.getActorId(),
                                 deviceId = identityProvider.getDeviceId(),
-                                reason = "Resolved stock conflict locally by supervisor (${authState.activeActorId})",
+                                reason = "Resolved stock conflict locally (${authState.activeActorId})",
                             )
                             syncUiMessage = if (outcome == ConflictResolutionOutcome.REVERSED_LOCALLY_WITH_AUDIT) {
                                 "Sale marked locally reversed with audit trail preserved."
@@ -1892,10 +1892,8 @@ fun EmofahAppShell(
                 scope.launch {
                     val outcome = authRepository.verifyOtp(email, token)
                     if (outcome is AuthActionOutcome.SignedIn) {
-                        if (!authRepository.uiState.value.bootstrapNeeded) {
-                            showAuthDialog = false
-                        }
-                        syncUiMessage = "Signed in as ${outcome.session.email} (${outcome.session.staffRole.label})."
+                        showAuthDialog = false
+                        syncUiMessage = "Signed in as ${outcome.session.email}."
                     }
                 }
             },

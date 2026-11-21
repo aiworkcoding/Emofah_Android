@@ -67,7 +67,7 @@ class SupabaseSaleRpcClient(
         withContext(Dispatchers.IO) {
             if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
                 return@withContext SaleRpcOutcome.NetworkOrTransientError(
-                    "Supabase credentials not configured in local.properties."
+                    "Supabase configuration missing in BuildConfig."
                 )
             }
 
@@ -95,7 +95,12 @@ class SupabaseSaleRpcClient(
                 val stream = if (code in 200..299) conn.inputStream else conn.errorStream
                 val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
 
-                parseRpcResponse(httpStatus = code, responseBody = body)
+                val outcome = parseRpcResponse(httpStatus = code, responseBody = body)
+                if (outcome is SaleRpcOutcome.RpcMissing) {
+                    submitLegacyRecordSaleFallback(request)
+                } else {
+                    outcome
+                }
             } catch (e: IOException) {
                 SaleRpcOutcome.NetworkOrTransientError(
                     e.message ?: "Network unreachable while recording sale."
@@ -108,6 +113,115 @@ class SupabaseSaleRpcClient(
                 conn?.disconnect()
             }
         }
+
+    private fun submitLegacyRecordSaleFallback(request: AndroidSaleRpcRequest): SaleRpcOutcome {
+        val baseUrl = supabaseUrl.trimEnd('/')
+        val rpcUrl = "$baseUrl/rest/v1/rpc/record_sale"
+        val rpcPayload = JSONObject().apply {
+            put("p_id", request.productId)
+            put("p_qty", request.quantity)
+            put("p_total", request.totalAmount)
+        }.toString()
+
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(rpcUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 10000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+            }
+            conn.outputStream.use { it.write(rpcPayload.toByteArray(Charsets.UTF_8)) }
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code in 200..299) {
+                val remainingQty = queryProductRemainingQty(baseUrl, request.productId) ?: 0
+                val latestSaleId = queryLatestSaleId(baseUrl, request.productId, request.quantity)
+                    ?: (System.currentTimeMillis() % 1_000_000_000L).coerceAtLeast(1L)
+                SaleRpcOutcome.CommittedOnline(
+                    serverSaleId = latestSaleId,
+                    remainingQty = remainingQty,
+                    alreadyCommitted = false,
+                )
+            } else {
+                val errJson = runCatching { JSONObject(body) }.getOrNull()
+                val errCode = errJson?.optString("code", "").orEmpty()
+                val errMsg = errJson?.optString("message", body).orEmpty()
+                when {
+                    code == 401 || code == 403 -> SaleRpcOutcome.AuthRequired(
+                        errMsg.ifBlank { "Authentication required (HTTP $code)." }
+                    )
+                    errCode == "PGRST202" || code == 404 -> SaleRpcOutcome.RpcMissing(
+                        "Neither record_android_sale nor record_sale is deployed on Supabase."
+                    )
+                    code in 400..499 && code != 408 && code != 429 -> SaleRpcOutcome.Rejected(
+                        code = errCode.ifBlank { "HTTP_$code" },
+                        message = errMsg.ifBlank { "Server rejected sale (HTTP $code)." },
+                    )
+                    else -> SaleRpcOutcome.NetworkOrTransientError(
+                        errMsg.ifBlank { "Transient error calling record_sale (HTTP $code)." }
+                    )
+                }
+            }
+        } catch (e: IOException) {
+            SaleRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable while recording sale.")
+        } catch (e: Exception) {
+            SaleRpcOutcome.NetworkOrTransientError(e.message ?: "Unexpected error during sale fallback.")
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun queryProductRemainingQty(baseUrl: String, productId: Long): Int? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/products?id=eq.$productId&select=qty&limit=1").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 6000
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Accept", "application/json")
+            }
+            if (conn.responseCode in 200..299) {
+                val arr = org.json.JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+                if (arr.length() > 0) arr.getJSONObject(0).optInt("qty") else null
+            } else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun queryLatestSaleId(baseUrl: String, productId: Long, qty: Int): Long? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/sales?product_id=eq.$productId&qty_sold=eq.$qty&order=id.desc&limit=1&select=id").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 6000
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Accept", "application/json")
+            }
+            if (conn.responseCode in 200..299) {
+                val arr = org.json.JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+                if (arr.length() > 0) arr.getJSONObject(0).optLong("id").takeIf { it > 0L } else null
+            } else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
 
     companion object {
         fun buildRpcPayloadJson(request: AndroidSaleRpcRequest): String {

@@ -41,6 +41,8 @@ class RecognitionReferenceIndex(
                 referencePhotoCount = if (product.imageUrl != null) 1 else 0,
                 isArchived = product.isArchived,
                 updatedAtIso = nowIso,
+                sku = product.sku,
+                barcode = product.barcode,
             )
             entriesByProductId[product.id] = entry
         }
@@ -128,12 +130,17 @@ class RecognitionReferenceIndex(
 
         return active
             .map { entry ->
+                val barcodeBoost = if (
+                    trimmed.isNotEmpty() &&
+                    (entry.barcode?.equals(trimmed, ignoreCase = true) == true ||
+                        entry.sku?.equals(trimmed, ignoreCase = true) == true)
+                ) 20 else 0
                 val exactBoost = if (trimmed.isNotEmpty() && entry.canonicalName.contains(trimmed, ignoreCase = true)) 10 else 0
                 val aliasBoost = if (trimmed.isNotEmpty() && entry.aliases.any { it.contains(trimmed, ignoreCase = true) }) 8 else 0
                 val tokenHits = terms.count { t ->
                     entry.searchTokens.any { token -> token.contains(t) }
                 }
-                entry to (exactBoost + aliasBoost + tokenHits)
+                entry to (barcodeBoost + exactBoost + aliasBoost + tokenHits)
             }
             .filter { it.second > 0 }
             .sortedByDescending { it.second }
@@ -184,6 +191,8 @@ class RecognitionReferenceIndex(
                     referencePhotoCount = obj.getInt("referencePhotoCount"),
                     isArchived = obj.getBoolean("isArchived"),
                     updatedAtIso = obj.getString("updatedAtIso"),
+                    sku = obj.optString("sku").takeIf { it.isNotEmpty() && it != "null" },
+                    barcode = obj.optString("barcode").takeIf { it.isNotEmpty() && it != "null" },
                 )
                 entriesByProductId[entry.productId] = entry
                 if (aliases.isNotEmpty()) {
@@ -226,6 +235,8 @@ class RecognitionReferenceIndex(
                         put("referencePhotoCount", e.referencePhotoCount)
                         put("isArchived", e.isArchived)
                         put("updatedAtIso", e.updatedAtIso)
+                        put("sku", e.sku ?: JSONObject.NULL)
+                        put("barcode", e.barcode ?: JSONObject.NULL)
                     }
                 )
             }
@@ -247,6 +258,6 @@ class RecognitionReferenceIndex(
         List(length()) { idx -> getString(idx) }
 
     companion object {
-        const val INDEX_VERSION = 1
+        const val INDEX_VERSION = 2
     }
 }

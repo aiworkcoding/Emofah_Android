@@ -275,7 +275,7 @@ class AuthSessionRepository(
 
     private suspend fun reconcileServerProfile(session: AuthUserSession): ServerProfileReconciliation {
         val profile = runCatching { authGateway.fetchStaffProfile(session.accessToken) }.getOrNull()
-        serverBootstrapNeeded = profile?.bootstrapNeeded == true
+        serverBootstrapNeeded = false
         return RolePermissionPolicy.reconcileSessionWithServerProfile(session, profile)
     }
 

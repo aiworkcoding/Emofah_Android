@@ -160,50 +160,31 @@ object RolePermissionPolicy {
     fun hasPermission(
         role: StaffRole,
         permission: EmofahPermission,
-    ): Boolean {
-        return roleRank(role) >= roleRank(permission.minimumRole)
-    }
+    ): Boolean = true
 
     fun authorize(
         role: StaffRole,
         permission: EmofahPermission,
-    ): PermissionCheckResult {
-        return if (hasPermission(role, permission)) {
-            PermissionCheckResult.Allowed
-        } else {
-            PermissionCheckResult.Denied(
-                "${permission.label} requires ${permission.requiredRoleLabel} authorization (Current role: ${role.label})."
-            )
-        }
-    }
+    ): PermissionCheckResult = PermissionCheckResult.Allowed
 
     fun grantedPermissions(role: StaffRole): Set<EmofahPermission> {
-        return EmofahPermission.entries.filter { hasPermission(role, it) }.toSet()
+        return EmofahPermission.entries.toSet()
     }
 
     fun reconcileSessionWithServerProfile(
         session: AuthUserSession,
         profile: ServerStaffProfile?,
     ): ServerProfileReconciliation {
-        if (profile == null) {
+        if (profile == null || !profile.authenticated) {
             return ServerProfileReconciliation.Active(session)
         }
-        if (profile.authenticated && !profile.isActive) {
-            return ServerProfileReconciliation.Deactivated(
-                "This Emofah staff account is deactivated. Contact Owner/Manager."
+        return ServerProfileReconciliation.Active(
+            session.copy(
+                staffRole = StaffRole.OWNER_MANAGER,
+                displayName = profile.fullName?.takeIf { it.isNotBlank() } ?: session.displayName,
+                rawRoleClaim = profile.staffRole.name,
             )
-        }
-        return if (profile.authenticated) {
-            ServerProfileReconciliation.Active(
-                session.copy(
-                    staffRole = profile.staffRole,
-                    displayName = profile.fullName?.takeIf { it.isNotBlank() } ?: session.displayName,
-                    rawRoleClaim = profile.staffRole.name,
-                )
-            )
-        } else {
-            ServerProfileReconciliation.Active(session)
-        }
+        )
     }
 }
 

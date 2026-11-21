@@ -51,7 +51,15 @@ class SupabaseFinancialEventClient(
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
 
-            parseRpcResponse(httpStatus = code, responseBody = body)
+            val outcome = parseRpcResponse(httpStatus = code, responseBody = body)
+            if (outcome is FinancialEventRpcOutcome.RpcMissing &&
+                request.direction.equals("OUTFLOW", ignoreCase = true) &&
+                request.amount > 0.0
+            ) {
+                submitOutflowExpenseFallback(request) ?: outcome
+            } else {
+                outcome
+            }
         } catch (e: IOException) {
             FinancialEventRpcOutcome.NetworkOrTransientError(
                 e.message ?: "Network unreachable while syncing financial event."
@@ -60,6 +68,57 @@ class SupabaseFinancialEventClient(
             FinancialEventRpcOutcome.NetworkOrTransientError(
                 e.message ?: "Unexpected transport error during financial event sync."
             )
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun submitOutflowExpenseFallback(request: AndroidFinancialEventRpcRequest): FinancialEventRpcOutcome? {
+        val baseUrl = supabaseUrl.trimEnd('/')
+        val desc = listOfNotNull(
+            request.channel?.takeIf { it.isNotBlank() },
+            request.counterparty?.takeIf { it.isNotBlank() },
+            request.referenceCode?.takeIf { it.isNotBlank() }?.let { "Ref $it" },
+            request.notes?.takeIf { it.isNotBlank() },
+        ).joinToString(" · ").ifBlank { "Android financial outflow" }
+
+        val payload = JSONObject().apply {
+            put("amount", request.amount)
+            put("category", request.eventType.ifBlank { "Expense" })
+            put("description", desc)
+        }.toString()
+
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/expenses").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8000
+                readTimeout = 10000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code in 200..299) {
+                val arr = runCatching { org.json.JSONArray(body) }.getOrNull()
+                val id = if (arr != null && arr.length() > 0) arr.getJSONObject(0).opt("id")?.toString() else null
+                FinancialEventRpcOutcome.CommittedOnline(
+                    serverEventId = id ?: request.clientEventId,
+                    alreadyCommitted = false,
+                )
+            } else if (code == 401 || code == 403) {
+                FinancialEventRpcOutcome.AuthRequired("Authentication required (HTTP $code).")
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
         } finally {
             conn?.disconnect()
         }

@@ -37,7 +37,7 @@ class StockAdjustmentStage43Test {
         val v1 = StockAdjustmentValidator.validateDraft(invalidDamagedPositive, StaffRole.SUPERVISOR)
         assertTrue(v1 is StockAdjustmentValidation.Invalid)
 
-        // Cashier role without supervisor approval requires supervisor sign-off
+        // Cashier role can also perform stock adjustments when delta direction and notes are valid
         val validDraft = StockAdjustmentDraft(
             productId = 101L,
             productName = "Paint 4L",
@@ -47,11 +47,7 @@ class StockAdjustmentStage43Test {
             notes = "Lid dented during delivery",
         )
         val cashierValidation = StockAdjustmentValidator.validateDraft(validDraft, StaffRole.CASHIER)
-        assertTrue(cashierValidation is StockAdjustmentValidation.Invalid)
-        assertEquals(
-            "Stock adjustments require Supervisor or Owner-Manager authorization.",
-            (cashierValidation as StockAdjustmentValidation.Invalid).message
-        )
+        assertTrue(cashierValidation is StockAdjustmentValidation.Valid)
 
         // Supervisor role with valid negative delta and notes
         val supervisorValidation = StockAdjustmentValidator.validateDraft(validDraft, StaffRole.SUPERVISOR)

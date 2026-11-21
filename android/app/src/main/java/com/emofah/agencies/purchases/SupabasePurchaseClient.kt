@@ -53,7 +53,12 @@ class SupabasePurchaseClient(
                 val code = conn.responseCode
                 val stream = if (code in 200..299) conn.inputStream else conn.errorStream
                 val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                parseRpcResponse(code, body)
+                val outcome = parseRpcResponse(code, body)
+                if (outcome is PurchaseRpcOutcome.RpcMissing) {
+                    submitViaRestTablesFallback(request)
+                } else {
+                    outcome
+                }
             } catch (e: IOException) {
                 PurchaseRpcOutcome.NetworkOrTransientError(
                     e.message ?: "Network unreachable while submitting purchase."
@@ -66,6 +71,252 @@ class SupabasePurchaseClient(
                 conn?.disconnect()
             }
         }
+
+    private fun submitViaRestTablesFallback(request: AndroidPurchaseRpcRequest): PurchaseRpcOutcome {
+        if (!request.isHumanConfirmed) {
+            return PurchaseRpcOutcome.Rejected("INVALID_INPUT", "Human confirmation is required before saving purchase.")
+        }
+        val baseUrl = supabaseUrl.trimEnd('/')
+        val resolved = mutableListOf<ResolvedPurchaseProductAck>()
+
+        try {
+            request.items.forEachIndexed { idx, line ->
+                if (line.itemCategory != PurchaseItemCategory.RESALE_PRODUCT) {
+                    resolved += ResolvedPurchaseProductAck(
+                        lineIndex = idx + 1,
+                        itemCategory = line.itemCategory,
+                        localTempProductId = line.localTempProductId,
+                        serverProductId = null,
+                        productName = line.rawName,
+                        category = line.newProductCategory,
+                        sellPrice = 0.0,
+                        buyPrice = line.unitCost,
+                        qty = line.quantity,
+                        serverQtyAfter = null,
+                        registeredNewProduct = false,
+                    )
+                    return@forEachIndexed
+                }
+
+                if (line.matchedProductId != null && line.matchedProductId > 0L) {
+                    val existing = fetchProductById(baseUrl, line.matchedProductId)
+                        ?: return PurchaseRpcOutcome.Rejected("PRODUCT_NOT_FOUND", "Product #${line.matchedProductId} not found.")
+                    val newQty = (existing.optInt("qty", 0) + line.quantity).coerceAtLeast(0)
+                    val patchJson = JSONObject().apply {
+                        put("qty", newQty)
+                        if (line.unitCost > 0.0) put("buy_price", line.unitCost)
+                    }.toString()
+                    val patched = patchProductById(baseUrl, line.matchedProductId, patchJson)
+                    resolved += ResolvedPurchaseProductAck(
+                        lineIndex = idx + 1,
+                        itemCategory = line.itemCategory,
+                        localTempProductId = line.localTempProductId,
+                        serverProductId = line.matchedProductId,
+                        productName = patched?.optString("name", existing.optString("name", line.rawName)) ?: line.rawName,
+                        category = existing.optString("category", line.newProductCategory),
+                        sellPrice = existing.optDouble("sell_price", 0.0),
+                        buyPrice = if (line.unitCost > 0.0) line.unitCost else existing.optDouble("buy_price", 0.0),
+                        qty = line.quantity,
+                        serverQtyAfter = patched?.optInt("qty", newQty) ?: newQty,
+                        registeredNewProduct = false,
+                    )
+                } else if (line.registerAsNewProduct) {
+                    val found = findProductByName(baseUrl, line.rawName)
+                    if (found != null) {
+                        val serverId = found.getLong("id")
+                        val newQty = (found.optInt("qty", 0) + line.quantity).coerceAtLeast(0)
+                        val patchJson = JSONObject().apply {
+                            put("qty", newQty)
+                            if (line.unitCost > 0.0) put("buy_price", line.unitCost)
+                        }.toString()
+                        patchProductById(baseUrl, serverId, patchJson)
+                        resolved += ResolvedPurchaseProductAck(
+                            lineIndex = idx + 1,
+                            itemCategory = line.itemCategory,
+                            localTempProductId = line.localTempProductId,
+                            serverProductId = serverId,
+                            productName = found.optString("name", line.rawName),
+                            category = found.optString("category", line.newProductCategory),
+                            sellPrice = found.optDouble("sell_price", line.newProductSellPrice ?: line.unitCost),
+                            buyPrice = line.unitCost,
+                            qty = line.quantity,
+                            serverQtyAfter = newQty,
+                            registeredNewProduct = false,
+                        )
+                    } else {
+                        val createJson = JSONObject().apply {
+                            put("name", line.rawName.trim())
+                            put("category", line.newProductCategory.ifBlank { "General" })
+                            put("sell_price", line.newProductSellPrice ?: line.unitCost)
+                            put("buy_price", line.unitCost)
+                            put("qty", line.quantity.coerceAtLeast(0))
+                        }.toString()
+                        val created = insertProductRow(baseUrl, createJson)
+                            ?: return PurchaseRpcOutcome.NetworkOrTransientError("Failed to register product ${line.rawName}.")
+                        resolved += ResolvedPurchaseProductAck(
+                            lineIndex = idx + 1,
+                            itemCategory = line.itemCategory,
+                            localTempProductId = line.localTempProductId,
+                            serverProductId = created.getLong("id"),
+                            productName = created.optString("name", line.rawName),
+                            category = created.optString("category", line.newProductCategory),
+                            sellPrice = created.optDouble("sell_price", line.newProductSellPrice ?: line.unitCost),
+                            buyPrice = created.optDouble("buy_price", line.unitCost),
+                            qty = line.quantity,
+                            serverQtyAfter = created.optInt("qty", line.quantity),
+                            registeredNewProduct = true,
+                        )
+                    }
+                }
+            }
+
+            var expenseId: String? = null
+            if (request.recordFinancialOutflow && request.totalAmount > 0.0) {
+                expenseId = insertPurchaseExpenseRow(baseUrl, request)
+            }
+
+            return PurchaseRpcOutcome.CommittedOnline(
+                serverPurchaseId = expenseId ?: request.clientPurchaseId,
+                totalAmount = request.totalAmount,
+                alreadyCommitted = false,
+                resolvedProducts = resolved,
+            )
+        } catch (e: IOException) {
+            return PurchaseRpcOutcome.NetworkOrTransientError(e.message ?: "Network unreachable while saving purchase.")
+        } catch (e: SecurityException) {
+            return PurchaseRpcOutcome.AuthRequired(e.message ?: "Authentication required.")
+        } catch (e: Exception) {
+            return PurchaseRpcOutcome.NetworkOrTransientError(e.message ?: "Unexpected error saving purchase.")
+        }
+    }
+
+    private fun fetchProductById(baseUrl: String, id: Long): JSONObject? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/products?id=eq.$id&select=id,name,category,sell_price,buy_price,qty&limit=1").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 7_000
+                readTimeout = 9_000
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Accept", "application/json")
+            }
+            val code = conn.responseCode
+            if (code == 401 || code == 403) throw SecurityException("HTTP $code")
+            if (code !in 200..299) throw IOException("HTTP $code")
+            val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+            if (arr.length() > 0) arr.getJSONObject(0) else null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun findProductByName(baseUrl: String, name: String): JSONObject? {
+        var conn: HttpURLConnection? = null
+        return try {
+            val encoded = java.net.URLEncoder.encode(name.trim(), "UTF-8")
+            conn = (URL("$baseUrl/rest/v1/products?name=ilike.$encoded&select=id,name,category,sell_price,buy_price,qty&limit=1").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 7_000
+                readTimeout = 9_000
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Accept", "application/json")
+            }
+            val code = conn.responseCode
+            if (code == 401 || code == 403) throw SecurityException("HTTP $code")
+            if (code !in 200..299) return null
+            val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+            if (arr.length() > 0) arr.getJSONObject(0) else null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun patchProductById(baseUrl: String, id: Long, payload: String): JSONObject? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/products?id=eq.$id").openConnection() as HttpURLConnection).apply {
+                requestMethod = "PATCH"
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code == 401 || code == 403) throw SecurityException("HTTP $code")
+            if (code !in 200..299) throw IOException("HTTP $code")
+            val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+            if (arr.length() > 0) arr.getJSONObject(0) else null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun insertProductRow(baseUrl: String, payload: String): JSONObject? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/products").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code == 401 || code == 403) throw SecurityException("HTTP $code")
+            if (code !in 200..299) throw IOException("HTTP $code")
+            val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+            if (arr.length() > 0) arr.getJSONObject(0) else null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun insertPurchaseExpenseRow(baseUrl: String, request: AndroidPurchaseRpcRequest): String? {
+        val descParts = buildList {
+            request.supplierName?.takeIf { it.isNotBlank() }?.let { add(it) }
+            request.invoiceRef?.takeIf { it.isNotBlank() }?.let { add("Ref $it") }
+            add("${request.items.size} item(s)")
+        }
+        val payload = JSONObject().apply {
+            put("amount", request.totalAmount)
+            put("category", "Purchase Receipt")
+            put("description", descParts.joinToString(" · "))
+        }.toString()
+
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL("$baseUrl/rest/v1/expenses").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer ${SupabaseConfig.bearerToken(anonKey)}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Prefer", "return=representation")
+            }
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) {
+                val arr = runCatching { JSONArray(conn.inputStream.bufferedReader().use { it.readText() }) }.getOrNull()
+                if (arr != null && arr.length() > 0) arr.getJSONObject(0).opt("id")?.toString() else null
+            } else null
+        } finally {
+            conn?.disconnect()
+        }
+    }
 
     companion object {
         internal fun buildRpcPayloadJson(req: AndroidPurchaseRpcRequest): String {

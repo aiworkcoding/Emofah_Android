@@ -77,7 +77,7 @@ export function BackendSetupView({ reducedMotion = false }: { reducedMotion?: bo
       id: 'reverse_android_sale',
       name: 'reverse_android_sale',
       type: 'RPC',
-      description: 'Non-destructive supervisor sale reversal & stock restoration',
+      description: 'Non-destructive sale reversal & stock restoration',
       status: 'CHECKING',
     },
     {
@@ -503,7 +503,7 @@ ON CONFLICT (user_id) DO UPDATE SET staff_role = EXCLUDED.staff_role;`;
             Used for cloud visual product recognition and receipt OCR. Deploy from your computer terminal using Supabase CLI:
           </p>
           <div className="p-3 rounded-xl bg-[#14558a]/10 dark:bg-[#43b1d4]/10 border border-[#14558a]/20 dark:border-[#43b1d4]/20 text-[11px] text-[#0b1f33] dark:text-[#cbd5e1] leading-relaxed">
-            💡 <strong>Good to know:</strong> Edge Functions are <em>optional bonus AI features</em>. You do <strong>not</strong> need them to use the app right now! Your Android app already scans text with the camera, records sales, tracks stock, monitors M-Pesa, and prints receipts 100% on the phone without Edge Functions!
+            <strong>Fully Offline Embedded AI:</strong> Edge Functions are optional. Your Android APK already bundles the on-device LiteRT vision model (<code className="font-mono">emofah_vision_model.tflite</code>), local barcode/OCR product matching, offline receipt layout parsing, and automatic live Supabase table/RPC sync out of the box.
           </div>
 
           <div className="space-y-2">
@@ -533,21 +533,21 @@ ON CONFLICT (user_id) DO UPDATE SET staff_role = EXCLUDED.staff_role;`;
           </div>
         </div>
 
-        {/* Staff Account Roles Card */}
+        {/* Unrestricted Staff Access Card */}
         <div className="emofah-glass rounded-3xl p-6 space-y-4 border border-[#103c60]/[0.08] dark:border-[#43b1d4]/[0.15]">
           <div className="flex items-center gap-2 text-[#103c60] dark:text-[#f1f5f9]">
             <ShieldCheck className="w-4 h-4 text-[#14558a] dark:text-[#43b1d4]" />
             <h3 className="font-display text-base font-bold">
-              Staff Roles &amp; Permissions
+              Full Staff Access &amp; Attribution
             </h3>
           </div>
           <p className="text-xs text-[#64748b] dark:text-[#94a3b8]">
-            Staff roles are stored in <code className="font-mono text-[#14558a] dark:text-[#43b1d4]">public.android_staff_roles</code>. Assign roles (<code>CASHIER</code>, <code>SUPERVISOR</code>, <code>OWNER_MANAGER</code>) after creating staff accounts in Supabase Auth.
+            Role restrictions and bootstrap lockouts are disabled. Every staff member can record sales, override prices with reason, reverse sales, adjust stock, count inventory, and inspect audit logs while preserving actor &amp; device attribution.
           </p>
 
           <div className="p-3 rounded-xl bg-white/60 dark:bg-[#0c1a2e]/60 border border-[#103c60]/10 dark:border-[#43b1d4]/15 flex items-center justify-between gap-2">
             <span className="text-xs text-[#475569] dark:text-[#cbd5e1] font-mono">
-              INSERT INTO public.android_staff_roles...
+              Optional staff profile directory SQL...
             </span>
             <button
               type="button"

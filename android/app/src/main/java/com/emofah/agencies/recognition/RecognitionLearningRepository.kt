@@ -2,6 +2,7 @@ package com.emofah.agencies.recognition
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import com.emofah.agencies.camera.ImageQualityMath
 import com.emofah.agencies.data.catalog.ProductIdentity
 import com.emofah.agencies.data.catalog.ReferenceAngle
 import com.emofah.agencies.data.catalog.SupabaseProductRepository
@@ -79,7 +80,22 @@ class RecognitionLearningRepository(
                 sourcePath = outcome.preservedPhotoPath,
             )
             if (stableLocalPhotoPath != null) {
-                if (finalDHash.isNullOrBlank()) {
+                val decodedBitmap = ImageQualityMath.decodeUprightBitmap(File(stableLocalPhotoPath), 640)
+                if (decodedBitmap != null) {
+                    try {
+                        if (finalDHash.isNullOrBlank()) {
+                            finalDHash = com.emofah.agencies.data.catalog.ReferenceImageCache
+                                .computeDHashFromBitmap(decodedBitmap)
+                        }
+                        if (repository.inferenceEngine.isReady) {
+                            repository.inferenceEngine.extractVisualFeatureEmbeddingOrNull(decodedBitmap)?.let { vec ->
+                                repository.embeddingCache.saveEmbedding(confirmedProduct.id, vec)
+                            }
+                        }
+                    } finally {
+                        if (!decodedBitmap.isRecycled) decodedBitmap.recycle()
+                    }
+                } else if (finalDHash.isNullOrBlank()) {
                     finalDHash = repository.imageCache.computeDHashHex(stableLocalPhotoPath)
                 }
                 val dims = readImageBounds(stableLocalPhotoPath)
