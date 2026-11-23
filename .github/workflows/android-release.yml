@@ -370,6 +370,12 @@ jobs:
           echo "FAILED_STAGE=Stage 11a: Release APK Verification" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=APK_VALIDATION_FAILURE" >> "$GITHUB_ENV"
 
+          if [ -z "${EXPECTED_CERT_SHA256:-}" ]; then
+            echo "FAILURE_CATEGORY=RELEASE_SIGNING_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [RELEASE_SIGNING_FAILURE] EXPECTED_CERT_SHA256 is missing from release signing preflight." >&2
+            exit 1
+          fi
+
           ../.github/scripts/verify-apk.sh \
             "app/build/outputs/apk/release/app-release.apk" \
             "$APP_ID" \

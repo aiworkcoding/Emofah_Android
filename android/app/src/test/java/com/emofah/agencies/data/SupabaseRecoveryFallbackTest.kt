@@ -119,4 +119,33 @@ class SupabaseRecoveryFallbackTest {
         val rev409 = SupabaseSaleReversalClient.parseRpcResponse(409, """{"code":"23503","message":"FK error"}""")
         assertTrue(rev409 is com.emofah.agencies.sales.SaleReversalRpcOutcome.Rejected)
     }
+
+    @Test
+    fun classifyProductsFetchResultHandlesNullAndHttpFailuresWithoutLosingValidData() {
+        val nullOutcome = com.emofah.agencies.data.catalog.SupabaseProductRepository.classifyFetchResult(null)
+        assertTrue(nullOutcome is com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Fallback)
+        assertTrue((nullOutcome as com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Fallback).errorMessage.isNotBlank())
+
+        val http400Outcome = com.emofah.agencies.data.catalog.SupabaseProductRepository.classifyFetchResult(
+            com.emofah.agencies.data.catalog.SupabaseProductRepository.ProductsFetchResult(400, null)
+        )
+        assertTrue(http400Outcome is com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Fallback)
+        assertTrue((http400Outcome as com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Fallback).errorMessage.contains("400"))
+
+        val nullBodyOutcome = com.emofah.agencies.data.catalog.SupabaseProductRepository.classifyFetchResult(
+            com.emofah.agencies.data.catalog.SupabaseProductRepository.ProductsFetchResult(200, null)
+        )
+        assertTrue(nullBodyOutcome is com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Fallback)
+
+        val validJson = """[{"id":10,"name":"A4 Exercise Book 200 pgs","qty":12,"sell_price":120.0,"buy_price":80.0,"category":"Books"}]"""
+        val okOutcome = com.emofah.agencies.data.catalog.SupabaseProductRepository.classifyFetchResult(
+            com.emofah.agencies.data.catalog.SupabaseProductRepository.ProductsFetchResult(200, validJson)
+        )
+        assertTrue(okOutcome is com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Success)
+        val parsed = com.emofah.agencies.data.catalog.SupabaseProductRepository.parseProductsJson(
+            (okOutcome as com.emofah.agencies.data.catalog.SupabaseProductRepository.Companion.ProductsFetchOutcome.Success).body
+        )
+        org.junit.Assert.assertEquals(1, parsed.size)
+        org.junit.Assert.assertEquals(10L, parsed[0].id)
+    }
 }

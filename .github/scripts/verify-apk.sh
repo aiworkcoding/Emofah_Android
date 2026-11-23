@@ -76,7 +76,15 @@ if [ -z "$BUILD_TOOLS_DIR" ] || [ ! -x "$BUILD_TOOLS_DIR/aapt2" ] || [ ! -x "$BU
   exit 1
 fi
 
-BADGING="$("$BUILD_TOOLS_DIR/aapt2" dump badging "$APK_PATH")"
+set +e
+BADGING="$("$BUILD_TOOLS_DIR/aapt2" dump badging "$APK_PATH" 2>&1)"
+BADGING_RC=$?
+set -e
+if [ "$BADGING_RC" -ne 0 ]; then
+  echo "$BADGING" >&2
+  echo "ERROR: [APK_VALIDATION_FAILURE] aapt2 failed to parse APK manifest in $APK_PATH" >&2
+  exit 1
+fi
 echo "$BADGING" | head -n 12
 
 PARSED_META="$(python3 - "$BADGING" <<'PYEOF'
@@ -114,8 +122,15 @@ if [ "$ACTUAL_VERSION_NAME" != "$EXPECTED_VERSION_NAME" ]; then
   exit 1
 fi
 
-SIGN_OUT="$("$BUILD_TOOLS_DIR/apksigner" verify --verbose --print-certs "$APK_PATH")"
+set +e
+SIGN_OUT="$("$BUILD_TOOLS_DIR/apksigner" verify --verbose --print-certs "$APK_PATH" 2>&1)"
+SIGN_RC=$?
+set -e
 echo "$SIGN_OUT"
+if [ "$SIGN_RC" -ne 0 ]; then
+  echo "ERROR: [APK_VALIDATION_FAILURE] apksigner signature verification failed for $APK_PATH (unsigned or invalid signature)." >&2
+  exit 1
+fi
 
 APK_CERT_SHA256="$(printf '%s\n' "$SIGN_OUT" | grep -i "Signer #1 certificate SHA-256 digest:" | head -n 1 | awk -F': ' '{print tolower($2)}' | tr -d '[:space:]:')"
 if [ -z "$APK_CERT_SHA256" ]; then

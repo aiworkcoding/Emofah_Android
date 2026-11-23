@@ -106,66 +106,69 @@ class SupabaseProductRepository(
             val response = fetchProductsRawJson(includeExtendedColumns = true)
                 ?: fetchProductsRawJson(includeExtendedColumns = false)
 
-            if (response.httpCode !in 200..299 || response.body == null) {
-                loadFromRoomFallback(
-                    nowMs = nowMs,
-                    errorMessage = "Supabase HTTP ${response.httpCode}; showing cached Room catalogue.",
-                )
-            } else {
-                val incoming = parseProductsJson(response.body)
-                val incomingById = incoming.associateBy { it.id }
-                val existingProducts = productDao.getAllProducts()
-                val existingProjections = productDao.getAllStockProjections()
-
-                val delta = CatalogueDeltaCalculator.computeDeltaPlan(
-                    incoming = incoming,
-                    existingProducts = existingProducts,
-                    existingProjections = existingProjections,
-                    nowEpochMs = nowMs,
-                )
-
-                productDao.applyCatalogueDelta(
-                    changedProducts = delta.changedProducts,
-                    updatedProjections = delta.updatedProjections,
-                )
-
-                val cachedEntities = productDao.getActiveProducts()
-                val cachedProducts = cachedEntities.map { entity ->
-                    val base = CatalogueDeltaCalculator.toProductIdentity(entity)
-                    val remote = incomingById[entity.id]
-                    if (remote != null) {
-                        base.copy(sku = remote.sku, barcode = remote.barcode)
-                    } else {
-                        base
-                    }
+            when (val outcome = classifyFetchResult(response)) {
+                is ProductsFetchOutcome.Fallback -> {
+                    loadFromRoomFallback(
+                        nowMs = nowMs,
+                        errorMessage = outcome.errorMessage,
+                    )
                 }
+                is ProductsFetchOutcome.Success -> {
+                    val incoming = parseProductsJson(outcome.body)
+                    val incomingById = incoming.associateBy { it.id }
+                    val existingProducts = productDao.getAllProducts()
+                    val existingProjections = productDao.getAllStockProjections()
 
-                // Re-hydrate confirmed aliases from Room before rebuilding index
-                for (entity in cachedEntities) {
-                    for (alias in CatalogueDeltaCalculator.parseAliasesCsv(entity.confirmedAliasesCsv)) {
-                        referenceIndex.addConfirmedAlias(entity.id, alias)
+                    val delta = CatalogueDeltaCalculator.computeDeltaPlan(
+                        incoming = incoming,
+                        existingProducts = existingProducts,
+                        existingProjections = existingProjections,
+                        nowEpochMs = nowMs,
+                    )
+
+                    productDao.applyCatalogueDelta(
+                        changedProducts = delta.changedProducts,
+                        updatedProjections = delta.updatedProjections,
+                    )
+
+                    val cachedEntities = productDao.getActiveProducts()
+                    val cachedProducts = cachedEntities.map { entity ->
+                        val base = CatalogueDeltaCalculator.toProductIdentity(entity)
+                        val remote = incomingById[entity.id]
+                        if (remote != null) {
+                            base.copy(sku = remote.sku, barcode = remote.barcode)
+                        } else {
+                            base
+                        }
                     }
+
+                    // Re-hydrate confirmed aliases from Room before rebuilding index
+                    for (entity in cachedEntities) {
+                        for (alias in CatalogueDeltaCalculator.parseAliasesCsv(entity.confirmedAliasesCsv)) {
+                            referenceIndex.addConfirmedAlias(entity.id, alias)
+                        }
+                    }
+                    var snapshot = referenceIndex.rebuildFromProducts(cachedProducts)
+
+                    // Progressively cache reference images and precompute local dHash + TFLite embeddings
+                    prefetchAndIndexVisualFeatures(cachedProducts, maxNewDownloads = 12)
+                    snapshot = referenceIndex.snapshot()
+
+                    val freshness = CatalogueDeltaCalculator.evaluateFreshness(
+                        lastSyncedAtEpochMs = nowMs,
+                        totalCachedProducts = cachedEntities.size,
+                        nowEpochMs = nowMs,
+                    )
+
+                    SyncResult(
+                        products = cachedProducts,
+                        indexSnapshot = snapshot,
+                        freshness = freshness,
+                        changedCount = delta.changedProducts.size,
+                        unchangedCount = delta.unchangedCount,
+                        fromCache = false,
+                    )
                 }
-                var snapshot = referenceIndex.rebuildFromProducts(cachedProducts)
-
-                // Progressively cache reference images and precompute local dHash + TFLite embeddings
-                prefetchAndIndexVisualFeatures(cachedProducts, maxNewDownloads = 12)
-                snapshot = referenceIndex.snapshot()
-
-                val freshness = CatalogueDeltaCalculator.evaluateFreshness(
-                    lastSyncedAtEpochMs = nowMs,
-                    totalCachedProducts = cachedEntities.size,
-                    nowEpochMs = nowMs,
-                )
-
-                SyncResult(
-                    products = cachedProducts,
-                    indexSnapshot = snapshot,
-                    freshness = freshness,
-                    changedCount = delta.changedProducts.size,
-                    unchangedCount = delta.unchangedCount,
-                    fromCache = false,
-                )
             }
         } catch (ex: Exception) {
             loadFromRoomFallback(
@@ -175,7 +178,7 @@ class SupabaseProductRepository(
         }
     }
 
-    private data class ProductsFetchResult(
+    internal data class ProductsFetchResult(
         val httpCode: Int,
         val body: String?,
     )
@@ -375,6 +378,26 @@ class SupabaseProductRepository(
     }
 
     companion object {
+        internal sealed class ProductsFetchOutcome {
+            data class Success(val body: String) : ProductsFetchOutcome()
+            data class Fallback(val errorMessage: String) : ProductsFetchOutcome()
+        }
+
+        internal fun classifyFetchResult(response: ProductsFetchResult?): ProductsFetchOutcome {
+            if (response == null) {
+                return ProductsFetchOutcome.Fallback(
+                    "Supabase catalogue request returned no response; showing cached Room catalogue."
+                )
+            }
+            val body = response.body
+            if (response.httpCode !in 200..299 || body == null) {
+                return ProductsFetchOutcome.Fallback(
+                    "Supabase HTTP ${response.httpCode}; showing cached Room catalogue."
+                )
+            }
+            return ProductsFetchOutcome.Success(body)
+        }
+
         fun parseProductsJson(rawJson: String): List<ProductIdentity> {
             val arr = JSONArray(rawJson)
             val list = ArrayList<ProductIdentity>(arr.length())

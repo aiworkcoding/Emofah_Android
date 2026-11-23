@@ -82,6 +82,24 @@ android {
         }
     }
 
+    val releasePackagingTasks = setOf(
+        "assembleRelease",
+        "bundleRelease",
+        "packageRelease",
+        "signReleaseBundle",
+        "validateSigningRelease",
+    )
+    gradle.taskGraph.whenReady {
+        val runsReleasePackaging = allTasks.any { task ->
+            task.project == project && task.name in releasePackagingTasks
+        }
+        if (runsReleasePackaging) {
+            if (!keystoreFile.exists() || releaseStorePassword.isNullOrBlank() || releaseKeyAlias.isNullOrBlank() || releaseKeyPassword.isNullOrBlank()) {
+                throw org.gradle.api.GradleException("[RELEASE_SIGNING_FAILURE] Release packaging requires release.keystore and signing credentials (ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD). Unsigned release builds are not permitted.")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

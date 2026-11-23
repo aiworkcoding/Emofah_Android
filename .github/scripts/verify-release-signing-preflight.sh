@@ -25,7 +25,21 @@ for tool in keytool jarsigner jar base64; do
   fi
 done
 
-printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "$KEYSTORE_OUT"
+export ANDROID_KEYSTORE_PASSWORD
+export ANDROID_KEY_PASSWORD
+
+CLEAN_B64="$(printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]')"
+if [ -z "$CLEAN_B64" ]; then
+  echo "ERROR: [RELEASE_SIGNING_FAILURE] ANDROID_KEYSTORE_BASE64 is empty after trimming whitespace." >&2
+  exit 1
+fi
+
+if ! printf '%s' "$CLEAN_B64" | base64 --decode > "$KEYSTORE_OUT" 2>/dev/null; then
+  rm -f "$KEYSTORE_OUT"
+  echo "ERROR: [RELEASE_SIGNING_FAILURE] Failed to Base64-decode ANDROID_KEYSTORE_BASE64 (invalid Base64 encoding)." >&2
+  exit 1
+fi
+
 chmod 600 "$KEYSTORE_OUT"
 if [ ! -s "$KEYSTORE_OUT" ]; then
   rm -f "$KEYSTORE_OUT"
@@ -33,10 +47,16 @@ if [ ! -s "$KEYSTORE_OUT" ]; then
   exit 1
 fi
 
+if ! keytool -list -keystore "$KEYSTORE_OUT" -storepass:env ANDROID_KEYSTORE_PASSWORD >/dev/null 2>&1; then
+  rm -f "$KEYSTORE_OUT"
+  echo "ERROR: [RELEASE_SIGNING_FAILURE] Cannot read release keystore (corrupt keystore file or incorrect ANDROID_KEYSTORE_PASSWORD)." >&2
+  exit 1
+fi
+
 KEYTOOL_OUT=""
 if ! KEYTOOL_OUT="$(keytool -list -v -keystore "$KEYSTORE_OUT" -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" 2>&1)"; then
   rm -f "$KEYSTORE_OUT"
-  echo "ERROR: [RELEASE_SIGNING_FAILURE] Keystore validation failed for alias '$ANDROID_KEY_ALIAS' (invalid keystore, store password, or alias)." >&2
+  echo "ERROR: [RELEASE_SIGNING_FAILURE] Release keystore alias '$ANDROID_KEY_ALIAS' not found or unreadable (check ANDROID_KEY_ALIAS)." >&2
   exit 1
 fi
 
@@ -57,7 +77,7 @@ trap cleanup_tmp EXIT
 printf 'preflight=true\n' > "$TMP_SIGN_DIR/probe.txt"
 jar cf "$TMP_SIGN_DIR/probe.jar" -C "$TMP_SIGN_DIR" probe.txt
 
-if ! jarsigner -keystore "$KEYSTORE_OUT" -storepass "$ANDROID_KEYSTORE_PASSWORD" -keypass "$ANDROID_KEY_PASSWORD" "$TMP_SIGN_DIR/probe.jar" "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+if ! jarsigner -keystore "$KEYSTORE_OUT" -storepass:env ANDROID_KEYSTORE_PASSWORD -keypass:env ANDROID_KEY_PASSWORD "$TMP_SIGN_DIR/probe.jar" "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
   rm -f "$KEYSTORE_OUT"
   echo "ERROR: [RELEASE_SIGNING_FAILURE] Private-key signing test failed for alias '$ANDROID_KEY_ALIAS' (check ANDROID_KEY_PASSWORD)." >&2
   exit 1
