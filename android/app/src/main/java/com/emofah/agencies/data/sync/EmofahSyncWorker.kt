@@ -9,6 +9,8 @@ import com.emofah.agencies.audit.AuditSyncRepository
 import com.emofah.agencies.data.catalog.CatalogueDeltaCalculator
 import com.emofah.agencies.data.catalog.SupabaseProductRepository
 import com.emofah.agencies.data.local.EmofahDatabase
+import com.emofah.agencies.financial.MpesaInflowAttributionStore
+import com.emofah.agencies.financial.SharedTransactionSyncRepository
 import com.emofah.agencies.notifications.EmofahNotificationManager
 import com.emofah.agencies.orders.SupabaseOrderRepository
 import com.emofah.agencies.sales.AndroidConnectivityChecker
@@ -79,6 +81,9 @@ class EmofahSyncWorker(
                     orderRepository.unmarkOrderConverted(orderId)
                 }
             },
+            onTransactionClassified = { eventId ->
+                EmofahNotificationManager.cancelTransactionNotification(applicationContext, eventId)
+            },
         )
         val telemetry = SyncTelemetryStore(applicationContext)
 
@@ -99,6 +104,14 @@ class EmofahSyncWorker(
                 connectivityChecker = connectivity,
             )
             auditSyncRepo.flushPendingAudits()
+
+            val sharedTransactionRepo = SharedTransactionSyncRepository(
+                database = database,
+                identityProvider = DeviceIdentityProvider(applicationContext),
+                connectivityChecker = connectivity,
+                attributionStore = MpesaInflowAttributionStore(applicationContext),
+            )
+            sharedTransactionRepo.refreshSharedTransactionsFromServer(applicationContext)
 
             val catalogRepo = SupabaseProductRepository(applicationContext, database)
             catalogRepo.syncCatalogueAndRebuildIndex(forceNetwork = false)

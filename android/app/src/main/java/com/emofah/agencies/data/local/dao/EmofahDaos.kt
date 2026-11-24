@@ -1076,6 +1076,22 @@ interface SyncQueueDao {
         financialAndDraftDao: FinancialAndDraftDao,
         auditDao: AuditDao,
     ) {
+        syncQueueDaoReconcileUpdate(eventId, serverEventId, syncedAtEpochMs, retryCount)
+        financialAndDraftDao.updateFinancialServerAck(
+            eventId = financialEventId,
+            serverEventId = serverEventId,
+            syncStatus = "SERVER_CONFIRMED",
+            classificationStatus = "PENDING_CLASSIFICATION",
+        )
+        auditDao.appendAudit(auditEvent)
+    }
+
+    private suspend fun syncQueueDaoReconcileUpdate(
+        eventId: String,
+        serverEventId: String,
+        syncedAtEpochMs: Long,
+        retryCount: Int,
+    ) {
         updateEventProgress(
             eventId = eventId,
             status = "SYNCED",
@@ -1085,9 +1101,66 @@ interface SyncQueueDao {
             failureReason = null,
             serverAckId = serverEventId,
         )
-        financialAndDraftDao.updateFinancialSyncStatus(
+    }
+
+    @Transaction
+    suspend fun commitFinancialClassificationOfflineAtomically(
+        financialEventId: String,
+        classificationStatus: String,
+        linkedSaleId: Long?,
+        linkedClientSaleId: String?,
+        linkedServiceId: String?,
+        linkedClientServiceId: String?,
+        linkedProductId: Long?,
+        linkedProductName: String?,
+        linkedQuantity: Int?,
+        classificationNote: String?,
+        classifiedAtEpochMs: Long,
+        classifiedBy: String,
+        classifiedDevice: String,
+        excludesFromBalance: Boolean,
+        syncEvent: SyncQueueEventEntity,
+        auditEvent: LocalAuditEventEntity,
+        financialAndDraftDao: FinancialAndDraftDao,
+        auditDao: AuditDao,
+    ) {
+        financialAndDraftDao.updateFinancialClassification(
             eventId = financialEventId,
-            syncStatus = "SERVER_CONFIRMED",
+            classificationStatus = classificationStatus,
+            linkedSaleId = linkedSaleId,
+            linkedClientSaleId = linkedClientSaleId,
+            linkedServiceId = linkedServiceId,
+            linkedClientServiceId = linkedClientServiceId,
+            linkedProductId = linkedProductId,
+            linkedProductName = linkedProductName,
+            linkedQuantity = linkedQuantity,
+            classificationNote = classificationNote,
+            classifiedAtEpochMs = classifiedAtEpochMs,
+            classifiedBy = classifiedBy,
+            classifiedDevice = classifiedDevice,
+            excludesFromBalance = excludesFromBalance,
+        )
+        upsertEvent(syncEvent)
+        auditDao.appendAudit(auditEvent)
+    }
+
+    @Transaction
+    suspend fun reconcileSyncedFinancialClassificationAtomically(
+        eventId: String,
+        serverAckId: String,
+        syncedAtEpochMs: Long,
+        retryCount: Int,
+        auditEvent: LocalAuditEventEntity,
+        auditDao: AuditDao,
+    ) {
+        updateEventProgress(
+            eventId = eventId,
+            status = "SYNCED",
+            retryCount = retryCount,
+            attemptEpochMs = syncedAtEpochMs,
+            nextRetryEpochMs = syncedAtEpochMs,
+            failureReason = null,
+            serverAckId = serverAckId,
         )
         auditDao.appendAudit(auditEvent)
     }
@@ -1705,6 +1778,70 @@ interface FinancialAndDraftDao {
 
     @Query("UPDATE pending_financial_events SET sync_status = :syncStatus WHERE event_id = :eventId")
     suspend fun updateFinancialSyncStatus(eventId: String, syncStatus: String)
+
+    @Query(
+        """
+        UPDATE pending_financial_events
+        SET server_event_id = :serverEventId,
+            sync_status = :syncStatus,
+            classification_status = CASE
+                WHEN classification_status IN ('PENDING_DESKTOP_RULES', 'UNCLASSIFIED', '') THEN :classificationStatus
+                ELSE classification_status
+            END
+        WHERE event_id = :eventId
+        """
+    )
+    suspend fun updateFinancialServerAck(
+        eventId: String,
+        serverEventId: String,
+        syncStatus: String,
+        classificationStatus: String,
+    )
+
+    @Query(
+        """
+        UPDATE pending_financial_events
+        SET classification_status = :classificationStatus,
+            linked_sale_id = :linkedSaleId,
+            linked_client_sale_id = :linkedClientSaleId,
+            linked_service_id = :linkedServiceId,
+            linked_client_service_id = :linkedClientServiceId,
+            linked_product_id = :linkedProductId,
+            linked_product_name = :linkedProductName,
+            linked_quantity = :linkedQuantity,
+            classification_note = :classificationNote,
+            classified_at_epoch_ms = :classifiedAtEpochMs,
+            classified_by = :classifiedBy,
+            classified_device = :classifiedDevice,
+            excludes_from_balance = :excludesFromBalance
+        WHERE event_id = :eventId
+        """
+    )
+    suspend fun updateFinancialClassification(
+        eventId: String,
+        classificationStatus: String,
+        linkedSaleId: Long?,
+        linkedClientSaleId: String?,
+        linkedServiceId: String?,
+        linkedClientServiceId: String?,
+        linkedProductId: Long?,
+        linkedProductName: String?,
+        linkedQuantity: Int?,
+        classificationNote: String?,
+        classifiedAtEpochMs: Long?,
+        classifiedBy: String?,
+        classifiedDevice: String?,
+        excludesFromBalance: Boolean,
+    )
+
+    @Query("SELECT * FROM pending_financial_events WHERE event_id = :eventId LIMIT 1")
+    suspend fun findByEventId(eventId: String): PendingFinancialEventEntity?
+
+    @Query("SELECT * FROM pending_financial_events WHERE server_event_id = :serverEventId LIMIT 1")
+    suspend fun findByServerEventId(serverEventId: String): PendingFinancialEventEntity?
+
+    @Query("SELECT * FROM pending_financial_events ORDER BY event_timestamp_epoch_ms DESC")
+    suspend fun getAllFinancialEventsSnapshot(): List<PendingFinancialEventEntity>
 
     @Query("SELECT * FROM pending_financial_events WHERE UPPER(transaction_reference) = UPPER(:ref) LIMIT 1")
     suspend fun findByTransactionReference(ref: String): PendingFinancialEventEntity?

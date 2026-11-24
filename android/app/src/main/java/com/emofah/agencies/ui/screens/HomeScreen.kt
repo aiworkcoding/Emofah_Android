@@ -53,6 +53,7 @@ import com.emofah.agencies.auth.AuthStatus
 import com.emofah.agencies.auth.AuthUiState
 import com.emofah.agencies.data.SupabaseConfig
 import com.emofah.agencies.data.local.entities.PendingFinancialEventEntity
+import com.emofah.agencies.data.local.entities.SyncState
 import com.emofah.agencies.reporting.DailyActivitySummary
 import com.emofah.agencies.ui.components.EmofahAnimatedVisibility
 import com.emofah.agencies.ui.components.EmofahBadgeTone
@@ -66,6 +67,9 @@ import com.emofah.agencies.ui.components.emofahPressScale
 import com.emofah.agencies.ui.navigation.EmofahDestination
 import com.emofah.agencies.ui.theme.emofahColors
 import com.emofah.agencies.ui.theme.tabular
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -88,6 +92,7 @@ fun HomeScreen(
     authState: AuthUiState = AuthUiState(),
     onOpenAuth: (() -> Unit)? = null,
     unlinkedMpesaInflow: PendingFinancialEventEntity? = null,
+    pendingClassificationTotalCount: Int = 0,
     onUseMpesaForSale: (PendingFinancialEventEntity) -> Unit = {},
     onUseMpesaForService: (PendingFinancialEventEntity) -> Unit = {},
     onDismissMpesaInflow: (PendingFinancialEventEntity) -> Unit = {},
@@ -95,6 +100,7 @@ fun HomeScreen(
 ) {
     val colors = MaterialTheme.emofahColors
     val totalAlerts = outOfStockCount + lowStockAlertCount
+    val triageTimeFmt = remember { SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()) }
 
     Column(
         modifier = modifier
@@ -168,12 +174,19 @@ fun HomeScreen(
             )
         }
 
-        // M-Pesa Incoming Triage Card
+        // Shared Pending-Classification Triage Card
         EmofahAnimatedVisibility(visible = unlinkedMpesaInflow != null) {
             unlinkedMpesaInflow?.let { inflow ->
+                val isInflow = inflow.direction.equals("INFLOW", ignoreCase = true)
+                val directionLabel = when (inflow.direction.uppercase()) {
+                    "INFLOW" -> "Received"
+                    "OUTFLOW" -> "Sent"
+                    else -> "Transfer"
+                }
+                val isServerSaved = inflow.syncStatus == SyncState.SERVER_CONFIRMED
                 EmofahCard(
                     containerColor = colors.infoContainer,
-                    borderColor = colors.info.copy(alpha = 0.28f),
+                    borderColor = colors.info.copy(alpha = 0.34f),
                     contentPadding = PaddingValues(16.dp),
                 ) {
                     Row(
@@ -184,6 +197,7 @@ fun HomeScreen(
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f),
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
@@ -201,29 +215,42 @@ fun HomeScreen(
                             }
                             Column {
                                 Text(
-                                    text = "M-Pesa Received · Ksh ${inflow.amount.roundToInt()}",
+                                    text = "$directionLabel · Ksh ${inflow.amount.roundToInt()}",
                                     style = MaterialTheme.typography.titleSmall.tabular(),
                                     fontWeight = FontWeight.Bold,
                                     color = colors.textPrimary,
                                 )
                                 Text(
                                     text = buildString {
-                                        append("From ${inflow.counterparty?.takeIf { it.isNotBlank() } ?: "Customer"}")
+                                        append(if (isInflow) "From " else "To ")
+                                        append(inflow.counterparty?.takeIf { it.isNotBlank() } ?: "Counterparty")
                                         inflow.transactionReference?.takeIf { it.isNotBlank() }?.let {
                                             append(" · Ref $it")
                                         }
+                                        append(" · ${triageTimeFmt.format(Date(inflow.eventTimestampEpochMs))}")
                                     },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = colors.textMuted,
                                 )
                             }
                         }
-                        EmofahStatusBadge(text = "New", tone = EmofahBadgeTone.INFO)
+                        EmofahStatusBadge(
+                            text = if (pendingClassificationTotalCount > 1) {
+                                "1 of $pendingClassificationTotalCount"
+                            } else {
+                                "Classify"
+                            },
+                            tone = EmofahBadgeTone.WARNING,
+                        )
                     }
 
                     Text(
-                        text = "What was this M-Pesa payment for?",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = if (isServerSaved) {
+                            "Saved in Supabase · awaiting classification (excluded from Business Balance until classified)"
+                        } else {
+                            "Saved on phone · uploading to Supabase"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
                         color = colors.textPrimary,
                     )
 
@@ -236,7 +263,7 @@ fun HomeScreen(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Record Sale", fontWeight = FontWeight.SemiBold)
+                            Text("Link Product", fontWeight = FontWeight.SemiBold, maxLines = 1)
                         }
                         OutlinedButton(
                             onClick = { onUseMpesaForService(inflow) },
@@ -244,16 +271,24 @@ fun HomeScreen(
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Record Service", fontWeight = FontWeight.SemiBold)
+                            Text("Link Service", fontWeight = FontWeight.SemiBold, maxLines = 1)
                         }
                     }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (pendingClassificationTotalCount > 1) {
+                            TextButton(onClick = { onNavigate(EmofahDestination.Money) }) {
+                                Text("View all ($pendingClassificationTotalCount)", style = MaterialTheme.typography.labelMedium)
+                            }
+                        } else {
+                            Spacer(Modifier.width(1.dp))
+                        }
                         TextButton(onClick = { onDismissMpesaInflow(inflow) }) {
-                            Text("Not a Shop Payment / Hide", style = MaterialTheme.typography.labelMedium)
+                            Text("Remove from Business", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }

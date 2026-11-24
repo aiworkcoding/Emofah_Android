@@ -44,7 +44,7 @@ abstract class EmofahDatabase : RoomDatabase() {
     abstract fun auditDao(): AuditDao
 
     companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
         private const val DATABASE_NAME = "emofah_agencies.db"
 
         @Volatile

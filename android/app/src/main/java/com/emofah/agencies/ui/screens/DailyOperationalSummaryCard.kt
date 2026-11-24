@@ -177,6 +177,17 @@ fun DailyOperationalSummaryCard(
             )
         }
 
+        SummaryMetricRow(
+            label = "Business Balance (Classified)",
+            value = "Ksh ${summary.businessBalance.roundToInt()}",
+        )
+        if (summary.pendingClassificationCount > 0 || summary.nonBusinessExcludedCount > 0) {
+            SummaryMetricRow(
+                label = "Classification Queue",
+                value = "${summary.pendingClassificationCount} awaiting · ${summary.nonBusinessExcludedCount} excluded",
+            )
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -205,7 +216,7 @@ fun DailyOperationalSummaryCard(
         }
 
         Text(
-            text = "Operational capture only. Accounting classification is managed on Desktop.",
+            text = "Only classified Product & Service transactions update Business Balance. Pending & Non-Business stay excluded.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.textMuted,
         )

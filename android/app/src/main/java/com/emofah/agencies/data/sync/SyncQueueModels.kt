@@ -3,6 +3,7 @@ package com.emofah.agencies.data.sync
 import com.emofah.agencies.data.catalog.RegisterProductRpcRequest
 import com.emofah.agencies.data.local.entities.SyncQueueEventEntity
 import com.emofah.agencies.financial.AndroidFinancialEventRpcRequest
+import com.emofah.agencies.financial.QueuedClassificationRequest
 import com.emofah.agencies.orders.AndroidOrderConversionRpcRequest
 import com.emofah.agencies.orders.AndroidOrderStatusRpcRequest
 import com.emofah.agencies.orders.ResolvedOrderSaleLine
@@ -49,6 +50,7 @@ object SyncEventType {
     const val STOCK_COUNT = "STOCK_COUNT"
     const val PURCHASE_RECEIPT = "PURCHASE_RECEIPT"
     const val SERVICE_OPERATION = "SERVICE_OPERATION"
+    const val FINANCIAL_CLASSIFICATION = "FINANCIAL_CLASSIFICATION"
 }
 
 data class SyncPassSummary(
@@ -885,6 +887,76 @@ object SyncQueuePolicy {
                 actorId = json.optString("actor_id", event.actorId).ifBlank { event.actorId },
                 deviceId = json.optString("device_id", event.deviceId).ifBlank { event.deviceId },
                 convertedAtIso = json.optString("converted_at", "").ifBlank { "1970-01-01T00:00:00Z" },
+            )
+        }.getOrNull()
+    }
+
+    fun serializeFinancialClassificationRequest(req: QueuedClassificationRequest): String {
+        return JSONObject().apply {
+            put("client_event_id", req.clientEventId)
+            put("server_event_id", req.serverEventId ?: JSONObject.NULL)
+            put("action", req.action)
+            put("idempotency_key", req.idempotencyKey)
+            put("product_id", req.productId ?: JSONObject.NULL)
+            put("quantity", req.quantity)
+            put("existing_sale_id", req.existingSaleId ?: JSONObject.NULL)
+            put("existing_client_sale_id", req.existingClientSaleId ?: JSONObject.NULL)
+            put("unit_sell_price", req.unitSellPrice ?: JSONObject.NULL)
+            put("payment_method", req.paymentMethod)
+            put("service_type", req.serviceType ?: JSONObject.NULL)
+            put("service_label", req.serviceLabel ?: JSONObject.NULL)
+            put("unit_label", req.unitLabel ?: JSONObject.NULL)
+            put("unit_price", req.unitPrice ?: JSONObject.NULL)
+            put("discount_amount", req.discountAmount)
+            put("note", req.note ?: JSONObject.NULL)
+            put("actor_id", req.actorId)
+            put("device_id", req.deviceId)
+        }.toString()
+    }
+
+    fun parseFinancialClassificationRequest(event: SyncQueueEventEntity): QueuedClassificationRequest? {
+        return runCatching {
+            val json = JSONObject(event.payloadJson)
+            val clientEventId = json.optString("client_event_id", event.entityId).trim()
+            val action = json.optString("action", "").trim().uppercase()
+            val idempotencyKey = json.optString("idempotency_key", "").trim()
+            if (clientEventId.isBlank() || idempotencyKey.isBlank() ||
+                action !in setOf("PRODUCT", "SERVICE", "NON_BUSINESS")
+            ) {
+                return null
+            }
+            fun optStr(key: String): String? =
+                json.optString(key, "").takeIf { !json.isNull(key) && it.isNotBlank() && it != "null" }
+            fun optLongOrNull(key: String): Long? =
+                if (json.has(key) && !json.isNull(key)) {
+                    json.optLong(key, -1L).takeIf { it > 0L }
+                } else null
+            fun optDoubleOrNull(key: String): Double? =
+                if (json.has(key) && !json.isNull(key)) {
+                    json.optDouble(key).takeIf { it.isFinite() && it >= 0.0 }
+                } else null
+
+            QueuedClassificationRequest(
+                clientEventId = clientEventId,
+                serverEventId = optStr("server_event_id"),
+                action = action,
+                idempotencyKey = idempotencyKey,
+                productId = optLongOrNull("product_id"),
+                quantity = json.optInt("quantity", 1).coerceAtLeast(1),
+                existingSaleId = optLongOrNull("existing_sale_id"),
+                existingClientSaleId = optStr("existing_client_sale_id"),
+                unitSellPrice = optDoubleOrNull("unit_sell_price"),
+                paymentMethod = json.optString("payment_method", "MPESA").ifBlank { "MPESA" },
+                serviceType = optStr("service_type"),
+                serviceLabel = optStr("service_label"),
+                unitLabel = optStr("unit_label"),
+                unitPrice = optDoubleOrNull("unit_price"),
+                discountAmount = json.optDouble("discount_amount", 0.0).let {
+                    if (it.isNaN() || it < 0.0) 0.0 else it
+                },
+                note = optStr("note"),
+                actorId = json.optString("actor_id", event.actorId).ifBlank { event.actorId },
+                deviceId = json.optString("device_id", event.deviceId).ifBlank { event.deviceId },
             )
         }.getOrNull()
     }

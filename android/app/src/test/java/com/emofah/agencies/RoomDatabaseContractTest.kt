@@ -21,8 +21,10 @@ class RoomDatabaseContractTest {
 
     @Test
     fun schemaVersionAndMigrationsAreExplicit() {
-        assertEquals(1, EmofahDatabase.SCHEMA_VERSION)
-        assertEquals(0, EmofahDatabaseMigrations.ALL_MIGRATIONS.size)
+        assertEquals(2, EmofahDatabase.SCHEMA_VERSION)
+        assertEquals(1, EmofahDatabaseMigrations.ALL_MIGRATIONS.size)
+        assertEquals(1, EmofahDatabaseMigrations.ALL_MIGRATIONS[0].startVersion)
+        assertEquals(2, EmofahDatabaseMigrations.ALL_MIGRATIONS[0].endVersion)
     }
 
     @Test

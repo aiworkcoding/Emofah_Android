@@ -148,6 +148,8 @@ class MpesaMonitoringRepository(
                     reviewStatus = reviewStatus,
                     syncStatus = SyncState.LOCAL_PENDING,
                     eventTimestampEpochMs = now,
+                    classificationStatus = "PENDING_CLASSIFICATION",
+                    excludesFromBalance = false,
                 )
 
                 val syncEvent = SyncQueueEventEntity(
@@ -268,6 +270,8 @@ class MpesaMonitoringRepository(
                 reviewStatus = "PENDING_DESKTOP_RULES",
                 syncStatus = SyncState.LOCAL_PENDING,
                 eventTimestampEpochMs = now,
+                classificationStatus = "PENDING_CLASSIFICATION",
+                excludesFromBalance = false,
             )
 
             val syncEvent = SyncQueueEventEntity(

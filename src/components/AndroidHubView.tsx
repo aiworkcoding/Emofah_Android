@@ -15,13 +15,42 @@ import {
   Receipt,
   ShieldCheck,
   Database,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Clock,
+  Ban,
+  Briefcase,
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import type {
+  BusinessBalanceSummary,
+  RecentSaleOption,
+  SharedFinancialTransaction,
+} from '../services/financialBalance';
+import type { captureFinancialTransaction } from '../services/financialTransactions';
+import type { ProductIdentity } from '../services/productCatalog';
+import type { ClassificationModalMode } from './TransactionsView';
 import type { NavTab } from '../types/app';
 
 interface AndroidHubViewProps {
   onNavigate: (tab: NavTab) => void;
   reducedMotion: boolean;
+  sharedTx?: {
+    transactions: SharedFinancialTransaction[];
+    pendingTransactions: SharedFinancialTransaction[];
+    recentSales: RecentSaleOption[];
+    products: ProductIdentity[];
+    summary: BusinessBalanceSummary;
+    busyEventId: string | null;
+    captureTransaction: (params: Parameters<typeof captureFinancialTransaction>[0]) => Promise<any>;
+    classifyAsProduct: (params: any) => Promise<any>;
+    classifyAsService: (params: any) => Promise<any>;
+    classifyAsNonBusiness: (params: any) => Promise<any>;
+  };
+  onOpenClassifyModal?: (
+    tx: SharedFinancialTransaction,
+    mode: ClassificationModalMode
+  ) => void;
 }
 
 type AndroidDest =
@@ -99,7 +128,12 @@ const ANDROID_MODULES: {
   },
 ];
 
-export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProps) {
+export function AndroidHubView({
+  onNavigate,
+  reducedMotion,
+  sharedTx,
+  onOpenClassifyModal,
+}: AndroidHubViewProps) {
   const [phoneDest, setPhoneDest] = useState<AndroidDest>('home');
   const [simTorch, setSimTorch] = useState(false);
   const [simStep, setSimStep] = useState<'viewfinder' | 'review' | 'candidates'>('viewfinder');
@@ -116,11 +150,13 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
   const [simAdjustReason, setSimAdjustReason] = useState('DAMAGED');
   const [simAdjustedUnits, setSimAdjustedUnits] = useState(0);
   const [simAdjustMsg, setSimAdjustMsg] = useState<string | null>(null);
-  const [simSmsConsent, setSimSmsConsent] = useState(false);
+  const [simSmsConsent, setSimSmsConsent] = useState(true);
   const [simMpesaEvents, setSimMpesaEvents] = useState<
     { ref: string; direction: 'INFLOW' | 'OUTFLOW'; channel: string; amount: number; fee?: number; balance?: number; party: string }[]
   >([]);
   const [simMoneyMsg, setSimMoneyMsg] = useState<string | null>(null);
+  const [customSmsText, setCustomSmsText] = useState('');
+  const [isCapturingSms, setIsCapturingSms] = useState(false);
   const tapMotion = reducedMotion ? undefined : { scale: 0.985 };
 
   const activeModule =
@@ -199,6 +235,73 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                     Daily Operations
                   </h2>
 
+                  {/* Shared Pending-Classification Triage Card */}
+                  {sharedTx && sharedTx.pendingTransactions.length > 0 && (() => {
+                    const pendingTx = sharedTx.pendingTransactions[0];
+                    const isInflow = pendingTx.direction === 'INFLOW';
+                    return (
+                      <div className="rounded-2xl p-3 bg-[#eaf4fd] dark:bg-[#0c223c] border border-[#14558a]/30 dark:border-[#43b1d4]/35 space-y-2">
+                        <div className="flex items-start justify-between gap-1.5">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-lg bg-[#14558a]/15 dark:bg-[#43b1d4]/20 flex items-center justify-center text-[#14558a] dark:text-[#43b1d4] shrink-0">
+                              {isInflow ? (
+                                <ArrowDownLeft className="w-4 h-4" />
+                              ) : (
+                                <ArrowUpRight className="w-4 h-4" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-[#103c60] dark:text-[#f1f5f9]">
+                                {isInflow ? 'Received' : 'Sent'} · Ksh {pendingTx.amount.toLocaleString()}
+                              </div>
+                              <div className="text-[10px] text-[#64748b] dark:text-[#94a3b8] truncate max-w-[150px]">
+                                {isInflow ? 'From ' : 'To '}
+                                {pendingTx.counterparty || 'Counterparty'} · Ref {pendingTx.referenceCode || pendingTx.id.slice(0, 8)}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-800 dark:text-amber-300 shrink-0">
+                            {sharedTx.pendingTransactions.length > 1
+                              ? `1 of ${sharedTx.pendingTransactions.length}`
+                              : 'Classify'}
+                          </span>
+                        </div>
+
+                        <div className="text-[10px] text-[#103c60] dark:text-[#f1f5f9] leading-tight">
+                          Saved in Supabase · awaiting classification (excluded from Business Balance until classified)
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onOpenClassifyModal?.(pendingTx, 'product')}
+                            className="h-8 rounded-xl bg-[#14558a] dark:bg-[#43b1d4] text-white dark:text-[#060d18] text-[10px] font-bold flex items-center justify-center cursor-pointer"
+                          >
+                            Link Product
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onOpenClassifyModal?.(pendingTx, 'service')}
+                            className="h-8 rounded-xl border border-[#14558a]/35 dark:border-[#43b1d4]/40 bg-white/60 dark:bg-[#0d1f36]/60 text-[#103c60] dark:text-[#f1f5f9] text-[10px] font-bold flex items-center justify-center cursor-pointer"
+                          >
+                            Link Service
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-0.5 text-[10px]">
+                          <span className="text-[#64748b] dark:text-[#94a3b8]">Personal or non-business?</span>
+                          <button
+                            type="button"
+                            onClick={() => onOpenClassifyModal?.(pendingTx, 'non_business')}
+                            className="text-[#14558a] dark:text-[#43b1d4] font-bold hover:underline cursor-pointer"
+                          >
+                            Remove from Business
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <motion.button
                     type="button"
                     whileTap={tapMotion}
@@ -234,7 +337,7 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                       className="h-11 px-2.5 rounded-xl border border-[#103c60]/15 dark:border-[#43b1d4]/25 bg-white dark:bg-[#0d1f36] text-xs font-medium text-[#103c60] dark:text-[#f1f5f9] flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Receipt className="w-3.5 h-3.5 text-[#14558a] dark:text-[#43b1d4]" />
-                      <span>Record Expense</span>
+                      <span>Money &amp; M-Pesa</span>
                     </button>
                     <button
                       type="button"
@@ -254,17 +357,46 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                     </button>
                   </div>
 
-                  {/* Honest Today & Sync Card */}
+                  {/* Honest Today & Business Balance Card */}
                   <div className="rounded-2xl p-3.5 bg-[#ebf2f7] dark:bg-[#132945] space-y-2">
                     <div className="text-xs font-semibold text-[#103c60] dark:text-[#f1f5f9]">
-                      Today &amp; Sync Status
+                      Business Balance &amp; Sync Status
                     </div>
-                    <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
-                      <span className="text-[#475569] dark:text-[#94a3b8]">Sales today</span>
-                      <span className="font-medium text-[#103c60] dark:text-[#f1f5f9]">
-                        {simTodaySales.count} sale(s) · Ksh {simTodaySales.total.toLocaleString()}
-                      </span>
-                    </div>
+                    {sharedTx ? (
+                      <>
+                        <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
+                          <span className="text-[#475569] dark:text-[#94a3b8]">Business Balance</span>
+                          <span className="font-bold text-[#103c60] dark:text-[#f1f5f9]">
+                            Ksh {sharedTx.summary.businessBalance.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
+                          <span className="text-[#475569] dark:text-[#94a3b8]">Classified Products</span>
+                          <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                            Ksh {sharedTx.summary.businessProductNet.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
+                          <span className="text-[#475569] dark:text-[#94a3b8]">Classified Services</span>
+                          <span className="font-medium text-[#14558a] dark:text-[#43b1d4]">
+                            Ksh {sharedTx.summary.businessServiceNet.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
+                          <span className="text-[#475569] dark:text-[#94a3b8]">Pending Classification</span>
+                          <span className="font-medium text-amber-600 dark:text-amber-400">
+                            {sharedTx.summary.pendingCount} (excluded)
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
+                        <span className="text-[#475569] dark:text-[#94a3b8]">Sales today</span>
+                        <span className="font-medium text-[#103c60] dark:text-[#f1f5f9]">
+                          {simTodaySales.count} sale(s) · Ksh {simTodaySales.total.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
                     <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
                       <span className="text-[#475569] dark:text-[#94a3b8]">Pending queue</span>
                       <span className="font-medium text-emerald-600 dark:text-emerald-400">
@@ -272,10 +404,6 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                           ? 'All synced (0 pending)'
                           : `${simTodaySales.pending} pending sync`}
                       </span>
-                    </div>
-                    <div className="rounded-lg px-3 py-2 bg-white dark:bg-[#0d1f36] flex items-center justify-between text-[11px]">
-                      <span className="text-[#475569] dark:text-[#94a3b8]">Catalogue Cache</span>
-                      <span className="font-medium text-emerald-600 dark:text-emerald-400">Stage 3.2 · Room Delta</span>
                     </div>
                   </div>
                 </>
@@ -893,94 +1021,225 @@ export function AndroidHubView({ onNavigate, reducedMotion }: AndroidHubViewProp
                   <div className="grid grid-cols-2 gap-1.5">
                     <button
                       type="button"
-                      onClick={() => {
-                        setSimMoneyMsg('Parsed Received Money · QG789XYZ12 (Ksh 1,500, Bal Ksh 14,200).');
-                        setSimMpesaEvents((prev) =>
-                          prev.some((e) => e.ref === 'QG789XYZ12')
-                            ? prev
-                            : [
-                                {
-                                  ref: 'QG789XYZ12',
-                                  direction: 'INFLOW',
-                                  channel: 'Received Money',
-                                  amount: 1500,
-                                  balance: 14200,
-                                  party: 'JANE WANJIKU',
-                                },
-                                ...prev,
-                              ]
-                        );
+                      disabled={isCapturingSms}
+                      onClick={async () => {
+                        setIsCapturingSms(true);
+                        try {
+                          const ref = `QG${Math.random().toString(36).substring(2, 6).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
+                          if (sharedTx?.captureTransaction) {
+                            await sharedTx.captureTransaction({
+                              amount: 1500,
+                              direction: 'INFLOW',
+                              referenceCode: ref,
+                              channel: 'Received Money',
+                              counterparty: 'JANE WANJIKU',
+                              rawEvidence: `${ref} Confirmed. Ksh1,500.00 received from JANE WANJIKU 254712345678 on ${new Date().toLocaleDateString()}. New M-PESA balance is Ksh14,200.00.`,
+                              newBalance: 14200,
+                              source: 'ANDROID_PHONE_SIMULATOR',
+                            });
+                            setSimMoneyMsg(`Saved in Supabase: Ref ${ref} (Ksh 1,500). PENDING_CLASSIFICATION.`);
+                          }
+                        } finally {
+                          setIsCapturingSms(false);
+                        }
                       }}
-                      className="h-9 rounded-xl bg-[#14558a] dark:bg-[#43b1d4] text-white dark:text-[#060d18] text-[10px] font-bold cursor-pointer"
+                      className="h-9 rounded-xl bg-[#14558a] dark:bg-[#43b1d4] text-white dark:text-[#060d18] text-[10px] font-bold cursor-pointer disabled:opacity-60"
                     >
-                      Parse Inflow SMS
+                      {isCapturingSms ? 'Saving...' : 'Parse Inflow SMS'}
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setSimMoneyMsg('Parsed Paybill · QH123ABC99 (Ksh 850, Fee Ksh 23).');
-                        setSimMpesaEvents((prev) =>
-                          prev.some((e) => e.ref === 'QH123ABC99')
-                            ? prev
-                            : [
-                                {
-                                  ref: 'QH123ABC99',
-                                  direction: 'OUTFLOW',
-                                  channel: 'Paybill · Acc 142233',
-                                  amount: 850,
-                                  fee: 23,
-                                  balance: 13350,
-                                  party: 'KPLC PREPAID',
-                                },
-                                ...prev,
-                              ]
-                        );
+                      disabled={isCapturingSms}
+                      onClick={async () => {
+                        setIsCapturingSms(true);
+                        try {
+                          const ref = `QH${Math.random().toString(36).substring(2, 6).toUpperCase()}${Math.floor(1000 + Math.random() * 9000)}`;
+                          if (sharedTx?.captureTransaction) {
+                            await sharedTx.captureTransaction({
+                              amount: 850,
+                              direction: 'OUTFLOW',
+                              referenceCode: ref,
+                              channel: 'Paybill · Acc 142233',
+                              counterparty: 'KPLC PREPAID',
+                              counterpartyAccount: '142233',
+                              transactionCost: 23,
+                              rawEvidence: `${ref} Confirmed. Ksh850.00 paid to KPLC PREPAID for account 142233. M-PESA balance is Ksh13,350.00. Transaction cost, Ksh23.00.`,
+                              newBalance: 13350,
+                              source: 'ANDROID_PHONE_SIMULATOR',
+                            });
+                            setSimMoneyMsg(`Saved in Supabase: Ref ${ref} (Ksh 850). PENDING_CLASSIFICATION.`);
+                          }
+                        } finally {
+                          setIsCapturingSms(false);
+                        }
                       }}
-                      className="h-9 rounded-xl bg-[#1768a7] dark:bg-[#348fc2] text-white dark:text-[#060d18] text-[10px] font-bold cursor-pointer"
+                      className="h-9 rounded-xl bg-[#1768a7] dark:bg-[#348fc2] text-white dark:text-[#060d18] text-[10px] font-bold cursor-pointer disabled:opacity-60"
                     >
-                      Parse Paybill SMS
+                      {isCapturingSms ? 'Saving...' : 'Parse Paybill SMS'}
                     </button>
                   </div>
 
+                  {/* Manual / Paste M-Pesa SMS Bar */}
+                  <div className="space-y-1.5 p-2 rounded-xl bg-[#ebf2f7] dark:bg-[#132945]">
+                    <div className="text-[10px] font-semibold text-[#103c60] dark:text-[#f1f5f9]">
+                      Paste SMS / Manual Entry
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={customSmsText}
+                        onChange={(e) => setCustomSmsText(e.target.value)}
+                        placeholder="e.g. QK890 Confirmed. Ksh2,000 received..."
+                        className="flex-1 px-2 py-1 rounded-lg bg-white dark:bg-[#0d1f36] border border-[#103c60]/10 dark:border-[#43b1d4]/15 text-[10px] text-[#103c60] dark:text-[#f1f5f9] placeholder:text-[#94a3b8] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={!customSmsText.trim() || isCapturingSms}
+                        onClick={async () => {
+                          if (!customSmsText.trim()) return;
+                          setIsCapturingSms(true);
+                          try {
+                            const text = customSmsText.trim();
+                            const amountMatch = text.match(/Ksh\s*([0-9,]+(?:\.[0-9]{2})?)/i);
+                            const amount = amountMatch
+                              ? parseFloat(amountMatch[1].replace(/,/g, ''))
+                              : 2000;
+                            const refMatch = text.match(/\b([A-Z0-9]{8,12})\b/);
+                            const ref = refMatch ? refMatch[1] : `QG${Date.now().toString(36).toUpperCase()}`;
+                            const isInflow =
+                              !text.toLowerCase().includes('paid to') &&
+                              !text.toLowerCase().includes('sent to');
+
+                            if (sharedTx?.captureTransaction) {
+                              await sharedTx.captureTransaction({
+                                amount: amount || 2000,
+                                direction: isInflow ? 'INFLOW' : 'OUTFLOW',
+                                referenceCode: ref,
+                                channel: isInflow ? 'Received Money' : 'Paybill',
+                                counterparty: isInflow ? 'CUSTOMER' : 'SUPPLIER',
+                                rawEvidence: text,
+                                source: 'ANDROID_SMS_PASTE',
+                              });
+                              setSimMoneyMsg(`Saved in Supabase: Ref ${ref} (Ksh ${amount.toLocaleString()}). Awaiting classification.`);
+                              setCustomSmsText('');
+                            }
+                          } finally {
+                            setIsCapturingSms(false);
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-[#14558a] dark:bg-[#43b1d4] text-white dark:text-[#060d18] text-[10px] font-bold cursor-pointer disabled:opacity-50 shrink-0"
+                      >
+                        Auto-Save
+                      </button>
+                    </div>
+                  </div>
+
                   {simMoneyMsg && (
-                    <div className="p-2 rounded-xl bg-[#14558a]/10 dark:bg-[#43b1d4]/15 text-[#14558a] dark:text-[#43b1d4] text-[10px]">
+                    <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 text-[10px] leading-relaxed">
                       {simMoneyMsg}
                     </div>
                   )}
 
                   <div className="space-y-1.5">
-                    <div className="text-[10px] font-bold text-[#103c60] dark:text-[#f1f5f9]">
-                      Parsed Financial Events ({simMpesaEvents.length})
+                    <div className="flex items-center justify-between text-[10px] font-bold text-[#103c60] dark:text-[#f1f5f9]">
+                      <span>Shared Supabase Transactions</span>
+                      <span className="font-mono text-[#64748b] dark:text-[#94a3b8]">
+                        {sharedTx ? sharedTx.transactions.length : 0} item(s)
+                      </span>
                     </div>
-                    {simMpesaEvents.length === 0 ? (
-                      <div className="p-2.5 rounded-xl bg-white/70 dark:bg-[#0d1f36]/60 text-[10px] text-[#64748b] dark:text-[#94a3b8]">
-                        No M-Pesa events captured yet.
+
+                    {(!sharedTx || sharedTx.transactions.length === 0) ? (
+                      <div className="p-3 rounded-xl bg-white/70 dark:bg-[#0d1f36]/60 text-[10px] text-[#64748b] dark:text-[#94a3b8] text-center">
+                        No transactions captured yet. Tap Parse Inflow SMS above to test automatic capture.
                       </div>
                     ) : (
-                      simMpesaEvents.map((evt) => (
-                        <div
-                          key={evt.ref}
-                          className="p-2.5 rounded-xl bg-white dark:bg-[#0d1f36] border border-[#103c60]/10 dark:border-[#43b1d4]/15 flex items-center justify-between text-[10px]"
-                        >
-                          <div>
-                            <div className="font-bold text-[#103c60] dark:text-[#f1f5f9]">
-                              {evt.direction === 'INFLOW' ? '+' : '-'}Ksh {evt.amount.toLocaleString()} · {evt.ref}
+                      sharedTx.transactions.slice(0, 8).map((tx) => {
+                        const isPending = tx.classificationStatus === 'PENDING_CLASSIFICATION';
+                        const isInflow = tx.direction === 'INFLOW';
+                        return (
+                          <div
+                            key={tx.id}
+                            className="p-2.5 rounded-xl bg-white dark:bg-[#0d1f36] border border-[#103c60]/10 dark:border-[#43b1d4]/15 space-y-2 text-[10px]"
+                          >
+                            <div className="flex items-start justify-between gap-1">
+                              <div>
+                                <div className="font-bold text-[#103c60] dark:text-[#f1f5f9] flex items-center gap-1">
+                                  {isInflow ? (
+                                    <ArrowDownLeft className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                  ) : (
+                                    <ArrowUpRight className="w-3 h-3 text-rose-600 dark:text-rose-400" />
+                                  )}
+                                  <span>{isInflow ? '+' : '-'}Ksh {tx.amount.toLocaleString()}</span>
+                                  <span className="text-[#64748b] dark:text-[#94a3b8]">· {tx.referenceCode || tx.id.slice(0, 8)}</span>
+                                </div>
+                                <div className="text-[#64748b] dark:text-[#94a3b8] truncate max-w-[190px]">
+                                  {tx.channel || 'Transfer'} · {tx.counterparty || 'Counterparty'}
+                                </div>
+                              </div>
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 ${
+                                  isPending
+                                    ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                                    : tx.classificationStatus === 'BUSINESS_PRODUCT'
+                                    ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300'
+                                    : tx.classificationStatus === 'BUSINESS_SERVICE'
+                                    ? 'bg-[#14558a]/15 text-[#14558a] dark:text-[#43b1d4]'
+                                    : 'bg-slate-200 dark:bg-slate-800 text-[#475569] dark:text-[#94a3b8]'
+                                }`}
+                              >
+                                {isPending
+                                  ? 'Awaiting'
+                                  : tx.classificationStatus === 'BUSINESS_PRODUCT'
+                                  ? 'Product'
+                                  : tx.classificationStatus === 'BUSINESS_SERVICE'
+                                  ? 'Service'
+                                  : 'Excluded'}
+                              </span>
                             </div>
-                            <div className="text-[#64748b] dark:text-[#94a3b8]">
-                              {evt.channel} · {evt.party}
-                            </div>
-                            {(evt.fee !== undefined || evt.balance !== undefined) && (
-                              <div className="text-[9px] text-[#14558a] dark:text-[#43b1d4]">
-                                {evt.fee !== undefined ? `Fee Ksh ${evt.fee} · ` : ''}
-                                {evt.balance !== undefined ? `Bal Ksh ${evt.balance.toLocaleString()}` : ''}
+
+                            {isPending ? (
+                              <div className="flex items-center gap-1 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenClassifyModal?.(tx, 'product')}
+                                  className="flex-1 py-1 px-1 rounded-lg bg-[#14558a] dark:bg-[#43b1d4] text-white dark:text-[#060d18] text-[9px] font-bold cursor-pointer"
+                                >
+                                  Product
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenClassifyModal?.(tx, 'service')}
+                                  className="flex-1 py-1 px-1 rounded-lg border border-[#14558a]/25 dark:border-[#43b1d4]/30 text-[#103c60] dark:text-[#f1f5f9] text-[9px] font-bold cursor-pointer"
+                                >
+                                  Service
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenClassifyModal?.(tx, 'non_business')}
+                                  className="py-1 px-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[#64748b] dark:text-[#94a3b8] text-[9px] font-medium cursor-pointer"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[9px] text-[#64748b] dark:text-[#94a3b8] flex items-center justify-between">
+                                <span>
+                                  {tx.classificationStatus === 'BUSINESS_PRODUCT'
+                                    ? tx.linkedProductName || 'Product sale linked'
+                                    : tx.classificationStatus === 'BUSINESS_SERVICE'
+                                    ? tx.serviceLabel || 'Service linked'
+                                    : 'Personal / non-business transfer'}
+                                </span>
+                                <span className="font-bold text-[#103c60] dark:text-[#f1f5f9]">
+                                  {tx.classificationStatus === 'NON_BUSINESS'
+                                    ? 'Ksh 0'
+                                    : `+Ksh ${tx.amount.toLocaleString()}`}
+                                </span>
                               </div>
                             )}
                           </div>
-                          <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-semibold">
-                            NEEDS_REVIEW
-                          </span>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>

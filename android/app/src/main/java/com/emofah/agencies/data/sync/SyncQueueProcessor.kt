@@ -11,9 +11,12 @@ import com.emofah.agencies.data.local.entities.LocalAuditEventEntity
 import com.emofah.agencies.data.local.entities.ProductEntity
 import com.emofah.agencies.data.local.entities.SyncQueueEventEntity
 import com.emofah.agencies.data.local.entities.SyncState
+import com.emofah.agencies.financial.ClassificationRpcOutcome
+import com.emofah.agencies.financial.ClassificationState
 import com.emofah.agencies.financial.FinancialEventGateway
 import com.emofah.agencies.financial.FinancialEventRpcOutcome
 import com.emofah.agencies.financial.SupabaseFinancialEventClient
+import com.emofah.agencies.financial.SupabaseTransactionClassificationClient
 import com.emofah.agencies.orders.OrderConversionGateway
 import com.emofah.agencies.orders.OrderConversionRpcOutcome
 import com.emofah.agencies.orders.OrderStatusGateway
@@ -88,6 +91,8 @@ class SyncQueueProcessor(
     private val clockEpochMs: () -> Long = { System.currentTimeMillis() },
     private val onOrderUpdateReconciled: (orderId: String, confirmedRawStatus: String?) -> Unit = { _, _ -> },
     private val onOrderConversionReconciled: (orderId: String, synced: Boolean) -> Unit = { _, _ -> },
+    private val classificationClient: SupabaseTransactionClassificationClient = SupabaseTransactionClassificationClient(),
+    private val onTransactionClassified: (eventId: String) -> Unit = {},
 ) {
     private val mutex = Mutex()
     private val syncQueueDao = database.syncQueueDao()
@@ -211,6 +216,7 @@ class SyncQueueProcessor(
             SyncEventType.STOCK_ADJUSTMENT -> processStockAdjustmentEvent(event, attemptEpochMs)
             SyncEventType.STOCK_COUNT -> processStockCountEvent(event, attemptEpochMs)
             SyncEventType.FINANCIAL_EVENT -> processFinancialEvent(event, attemptEpochMs)
+            SyncEventType.FINANCIAL_CLASSIFICATION -> processFinancialClassificationEvent(event, attemptEpochMs)
             SyncEventType.PURCHASE_RECEIPT -> processPurchaseReceiptEvent(event, attemptEpochMs)
             SyncEventType.SERVICE_OPERATION -> processServiceOperationEvent(event, attemptEpochMs)
             SyncEventType.ORDER_UPDATE -> processOrderUpdateEvent(event, attemptEpochMs)
@@ -1945,6 +1951,292 @@ class SyncQueueProcessor(
                     is OrderConversionRpcOutcome.RpcMissing -> outcome.message
                     is OrderConversionRpcOutcome.NetworkOrTransientError -> outcome.message
                     else -> "Transient error syncing order sale conversion."
+                }
+                val nextAt = SyncQueuePolicy.computeNextRetryEpochMs(attemptEpochMs, nextRetryCount)
+                syncQueueDao.updateEventProgress(
+                    eventId = event.eventId,
+                    status = SyncQueueStatus.FAILED_RETRYABLE,
+                    retryCount = nextRetryCount,
+                    attemptEpochMs = attemptEpochMs,
+                    nextRetryEpochMs = nextAt,
+                    failureReason = message,
+                    serverAckId = null,
+                )
+                QueueItemExecutionResult.RetryableFailure(message)
+            }
+        }
+    }
+
+    private suspend fun processFinancialClassificationEvent(
+        event: SyncQueueEventEntity,
+        attemptEpochMs: Long,
+    ): QueueItemExecutionResult {
+        val req = SyncQueuePolicy.parseFinancialClassificationRequest(event)
+        if (req == null) {
+            val msg = "Malformed queued classification payload for ${event.entityId}."
+            syncQueueDao.updateEventProgress(
+                eventId = event.eventId,
+                status = SyncQueueStatus.CONFLICT,
+                retryCount = event.retryCount + 1,
+                attemptEpochMs = attemptEpochMs,
+                nextRetryEpochMs = attemptEpochMs,
+                failureReason = msg,
+                serverAckId = null,
+            )
+            return QueueItemExecutionResult.Conflict(msg)
+        }
+
+        val localFinancial = financialAndDraftDao.findByEventId(req.clientEventId)
+        val finSyncRow = syncQueueDao.getEventById("sync-${req.clientEventId}")
+        val resolvedServerEventId = req.serverEventId?.takeIf { it.isNotBlank() && it != req.clientEventId }
+            ?: localFinancial?.serverEventId?.takeIf { it.isNotBlank() && it != req.clientEventId }
+            ?: finSyncRow?.serverAckId?.takeIf { it.isNotBlank() && it != req.clientEventId }
+
+        val nextRetryCount = event.retryCount + 1
+        if (resolvedServerEventId == null) {
+            val msg = "Waiting for captured transaction upload ack before classifying ${req.clientEventId}."
+            val nextAt = SyncQueuePolicy.computeNextRetryEpochMs(attemptEpochMs, nextRetryCount)
+            syncQueueDao.updateEventProgress(
+                eventId = event.eventId,
+                status = SyncQueueStatus.FAILED_RETRYABLE,
+                retryCount = nextRetryCount,
+                attemptEpochMs = attemptEpochMs,
+                nextRetryEpochMs = nextAt,
+                failureReason = msg,
+                serverAckId = null,
+            )
+            return QueueItemExecutionResult.RetryableFailure(msg)
+        }
+
+        val effectiveExistingSaleId = when {
+            req.existingSaleId != null && req.existingSaleId > 0L -> req.existingSaleId
+            !req.existingClientSaleId.isNullOrBlank() -> {
+                val saleWithItems = saleDao.getSaleWithItems(req.existingClientSaleId)
+                val serverSaleId = saleWithItems?.sale?.serverSaleId
+                if (serverSaleId == null || serverSaleId <= 0L) {
+                    val msg = "Waiting for linked sale ${req.existingClientSaleId} to sync before classifying."
+                    val nextAt = SyncQueuePolicy.computeNextRetryEpochMs(attemptEpochMs, nextRetryCount)
+                    syncQueueDao.updateEventProgress(
+                        eventId = event.eventId,
+                        status = SyncQueueStatus.FAILED_RETRYABLE,
+                        retryCount = nextRetryCount,
+                        attemptEpochMs = attemptEpochMs,
+                        nextRetryEpochMs = nextAt,
+                        failureReason = msg,
+                        serverAckId = null,
+                    )
+                    return QueueItemExecutionResult.RetryableFailure(msg)
+                }
+                serverSaleId
+            }
+            else -> null
+        }
+
+        syncQueueDao.updateEventProgress(
+            eventId = event.eventId,
+            status = SyncQueueStatus.IN_FLIGHT,
+            retryCount = event.retryCount,
+            attemptEpochMs = attemptEpochMs,
+            nextRetryEpochMs = attemptEpochMs,
+            failureReason = null,
+            serverAckId = null,
+        )
+
+        val outcome = when (req.action.uppercase()) {
+            "PRODUCT" -> classificationClient.classifyAsProduct(
+                serverEventId = resolvedServerEventId,
+                idempotencyKey = req.idempotencyKey,
+                productId = req.productId,
+                quantity = req.quantity,
+                existingSaleId = effectiveExistingSaleId,
+                unitSellPrice = req.unitSellPrice,
+                paymentMethod = req.paymentMethod,
+                note = req.note,
+                actorId = req.actorId,
+                deviceId = req.deviceId,
+            )
+
+            "SERVICE" -> classificationClient.classifyAsService(
+                serverEventId = resolvedServerEventId,
+                idempotencyKey = req.idempotencyKey,
+                serviceType = req.serviceType ?: "OTHER",
+                serviceLabel = req.serviceLabel,
+                quantityOrDuration = req.quantity,
+                unitLabel = req.unitLabel ?: "units",
+                unitPrice = req.unitPrice,
+                discountAmount = req.discountAmount,
+                note = req.note,
+                actorId = req.actorId,
+                deviceId = req.deviceId,
+            )
+
+            else -> classificationClient.classifyAsNonBusiness(
+                serverEventId = resolvedServerEventId,
+                idempotencyKey = req.idempotencyKey,
+                reason = req.note,
+                actorId = req.actorId,
+                deviceId = req.deviceId,
+            )
+        }
+
+        return when (outcome) {
+            is ClassificationRpcOutcome.Committed -> {
+                val syncedAt = clockEpochMs()
+                val remote = outcome.updatedEvent
+                if (remote != null) {
+                    financialAndDraftDao.updateFinancialClassification(
+                        eventId = req.clientEventId,
+                        classificationStatus = remote.classificationStatus.code,
+                        linkedSaleId = remote.linkedSaleId,
+                        linkedClientSaleId = remote.linkedClientSaleId,
+                        linkedServiceId = remote.linkedServiceId,
+                        linkedClientServiceId = remote.linkedClientServiceId,
+                        linkedProductId = remote.linkedProductId,
+                        linkedProductName = remote.linkedProductName,
+                        linkedQuantity = remote.linkedQuantity,
+                        classificationNote = remote.classificationNote,
+                        classifiedAtEpochMs = remote.classifiedAtEpochMs ?: syncedAt,
+                        classifiedBy = remote.classifiedBy,
+                        classifiedDevice = remote.classifiedDevice,
+                        excludesFromBalance = remote.excludesFromBalance,
+                    )
+                    financialAndDraftDao.updateFinancialSyncStatus(
+                        eventId = req.clientEventId,
+                        syncStatus = SyncState.SERVER_CONFIRMED,
+                    )
+                }
+                val audit = LocalAuditEventEntity(
+                    auditId = "audit-${UUID.randomUUID()}",
+                    actorId = req.actorId,
+                    deviceId = req.deviceId,
+                    operation = "SYNC_FINANCIAL_CLASSIFICATION_CONFIRMED",
+                    entityType = "FINANCIAL_EVENT",
+                    entityId = req.clientEventId,
+                    beforeJson = null,
+                    afterJson = JSONObject().apply {
+                        put("action", req.action)
+                        put("server_event_id", resolvedServerEventId)
+                        put("classification_status", remote?.classificationStatus?.code ?: req.action)
+                    }.toString(),
+                    reason = "Synced shared transaction classification to Supabase",
+                    syncStatus = SyncState.SERVER_CONFIRMED,
+                    occurredAtEpochMs = syncedAt,
+                )
+                syncQueueDao.reconcileSyncedFinancialClassificationAtomically(
+                    eventId = event.eventId,
+                    serverAckId = resolvedServerEventId,
+                    syncedAtEpochMs = syncedAt,
+                    retryCount = event.retryCount,
+                    auditEvent = audit,
+                    auditDao = auditDao,
+                )
+                onTransactionClassified(req.clientEventId)
+                QueueItemExecutionResult.Synced
+            }
+
+            is ClassificationRpcOutcome.AlreadyClassified -> {
+                val syncedAt = clockEpochMs()
+                val remote = outcome.updatedEvent
+                if (remote != null) {
+                    financialAndDraftDao.updateFinancialClassification(
+                        eventId = req.clientEventId,
+                        classificationStatus = remote.classificationStatus.code,
+                        linkedSaleId = remote.linkedSaleId,
+                        linkedClientSaleId = remote.linkedClientSaleId,
+                        linkedServiceId = remote.linkedServiceId,
+                        linkedClientServiceId = remote.linkedClientServiceId,
+                        linkedProductId = remote.linkedProductId,
+                        linkedProductName = remote.linkedProductName,
+                        linkedQuantity = remote.linkedQuantity,
+                        classificationNote = remote.classificationNote,
+                        classifiedAtEpochMs = remote.classifiedAtEpochMs ?: syncedAt,
+                        classifiedBy = remote.classifiedBy,
+                        classifiedDevice = remote.classifiedDevice,
+                        excludesFromBalance = remote.excludesFromBalance,
+                    )
+                    financialAndDraftDao.updateFinancialSyncStatus(
+                        eventId = req.clientEventId,
+                        syncStatus = SyncState.SERVER_CONFIRMED,
+                    )
+                }
+                val audit = LocalAuditEventEntity(
+                    auditId = "audit-${UUID.randomUUID()}",
+                    actorId = req.actorId,
+                    deviceId = req.deviceId,
+                    operation = "SYNC_FINANCIAL_CLASSIFICATION_REMOTE_WIN",
+                    entityType = "FINANCIAL_EVENT",
+                    entityId = req.clientEventId,
+                    beforeJson = event.payloadJson,
+                    afterJson = JSONObject().apply {
+                        put("winner_status", remote?.classificationStatus?.code ?: ClassificationState.PENDING_CLASSIFICATION.code)
+                        put("message", outcome.message)
+                    }.toString(),
+                    reason = outcome.message,
+                    syncStatus = SyncState.SERVER_CONFIRMED,
+                    occurredAtEpochMs = syncedAt,
+                )
+                syncQueueDao.reconcileSyncedFinancialClassificationAtomically(
+                    eventId = event.eventId,
+                    serverAckId = resolvedServerEventId,
+                    syncedAtEpochMs = syncedAt,
+                    retryCount = event.retryCount,
+                    auditEvent = audit,
+                    auditDao = auditDao,
+                )
+                onTransactionClassified(req.clientEventId)
+                QueueItemExecutionResult.Synced
+            }
+
+            is ClassificationRpcOutcome.Rejected -> {
+                syncQueueDao.updateEventProgress(
+                    eventId = event.eventId,
+                    status = SyncQueueStatus.CONFLICT,
+                    retryCount = nextRetryCount,
+                    attemptEpochMs = attemptEpochMs,
+                    nextRetryEpochMs = attemptEpochMs,
+                    failureReason = outcome.message,
+                    serverAckId = null,
+                )
+                runCatching {
+                    auditDao.appendAudit(
+                        LocalAuditEventEntity(
+                            auditId = "audit-${UUID.randomUUID()}",
+                            actorId = req.actorId,
+                            deviceId = req.deviceId,
+                            operation = "SYNC_FINANCIAL_CLASSIFICATION_CONFLICT",
+                            entityType = "FINANCIAL_EVENT",
+                            entityId = req.clientEventId,
+                            beforeJson = event.payloadJson,
+                            afterJson = outcome.code,
+                            reason = outcome.message,
+                            syncStatus = SyncState.CONFLICT,
+                            occurredAtEpochMs = attemptEpochMs,
+                        )
+                    )
+                }
+                QueueItemExecutionResult.Conflict(outcome.message)
+            }
+
+            is ClassificationRpcOutcome.AuthRequired -> {
+                syncQueueDao.updateEventProgress(
+                    eventId = event.eventId,
+                    status = SyncQueueStatus.AUTH_REQUIRED,
+                    retryCount = event.retryCount,
+                    attemptEpochMs = attemptEpochMs,
+                    nextRetryEpochMs = attemptEpochMs,
+                    failureReason = outcome.message,
+                    serverAckId = null,
+                )
+                QueueItemExecutionResult.AuthBlocked(outcome.message)
+            }
+
+            is ClassificationRpcOutcome.RpcMissing,
+            is ClassificationRpcOutcome.NetworkOrTransientError,
+            -> {
+                val message = when (outcome) {
+                    is ClassificationRpcOutcome.RpcMissing -> outcome.message
+                    is ClassificationRpcOutcome.NetworkOrTransientError -> outcome.message
+                    else -> "Transient error syncing classification."
                 }
                 val nextAt = SyncQueuePolicy.computeNextRetryEpochMs(attemptEpochMs, nextRetryCount)
                 syncQueueDao.updateEventProgress(

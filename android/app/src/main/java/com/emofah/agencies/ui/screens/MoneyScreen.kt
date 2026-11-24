@@ -33,6 +33,11 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Sms
 import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -58,12 +63,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.emofah.agencies.data.local.entities.PendingFinancialEventEntity
 import com.emofah.agencies.data.local.entities.SyncState
+import com.emofah.agencies.financial.BusinessBalanceCalculator
+import com.emofah.agencies.financial.ClassificationState
 import com.emofah.agencies.financial.FinancialEventDraft
 import com.emofah.agencies.financial.FinancialEventType
 import com.emofah.agencies.financial.FinancialMonitoringState
 import com.emofah.agencies.financial.MpesaInflowAttributionPolicy
 import com.emofah.agencies.financial.MpesaInflowLinkRecord
 import com.emofah.agencies.financial.MpesaInflowLinkTarget
+import com.emofah.agencies.financial.RemoteRecentSale
 import com.emofah.agencies.ui.components.EmofahBadgeTone
 import com.emofah.agencies.ui.components.EmofahCard
 import com.emofah.agencies.ui.components.EmofahEmptyState
@@ -93,9 +101,20 @@ fun MoneyScreen(
     onSyncNow: () -> Unit = {},
     onOpenReceiptScanner: () -> Unit = {},
     mpesaInflowLinks: Map<String, MpesaInflowLinkRecord> = emptyMap(),
+    remoteRecentSales: List<RemoteRecentSale> = emptyList(),
     onUseMpesaForSale: (PendingFinancialEventEntity) -> Unit = {},
     onUseMpesaForService: (PendingFinancialEventEntity) -> Unit = {},
     onDismissMpesaInflow: (PendingFinancialEventEntity) -> Unit = {},
+    onLinkExistingSaleToTransaction: (
+        event: PendingFinancialEventEntity,
+        saleId: Long,
+        productId: Long,
+        productName: String,
+        quantity: Int,
+    ) -> Unit = { _, _, _, _, _ -> },
+    onRemoveFromBusiness: (event: PendingFinancialEventEntity, reason: String) -> Unit = { evt, _ ->
+        onDismissMpesaInflow(evt)
+    },
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.emofahColors
@@ -107,9 +126,18 @@ fun MoneyScreen(
     var expenseReference by remember { mutableStateOf("") }
     var expenseNote by remember { mutableStateOf("") }
     var selectedManualType by remember { mutableStateOf(FinancialEventType.EXPENSE_OUTFLOW) }
+    var linkingProductTarget by remember { mutableStateOf<PendingFinancialEventEntity?>(null) }
+    var removingBusinessTarget by remember { mutableStateOf<PendingFinancialEventEntity?>(null) }
+    var removalReason by remember { mutableStateOf("Personal / non-business transaction") }
 
-    val latestUnlinkedInflow = remember(financialEvents, mpesaInflowLinks) {
-        MpesaInflowAttributionPolicy.findLatestUnlinkedInflow(financialEvents, mpesaInflowLinks)
+    val balanceReport = remember(financialEvents) {
+        BusinessBalanceCalculator.compute(financialEvents)
+    }
+    val pendingSharedTransactions = remember(financialEvents, mpesaInflowLinks) {
+        MpesaInflowAttributionPolicy.findPendingSharedTransactions(financialEvents, mpesaInflowLinks)
+    }
+    val unlinkedRemoteSales = remember(remoteRecentSales) {
+        remoteRecentSales.filter { it.alreadyLinkedEventId.isNullOrBlank() }
     }
 
     val smsPermissionLauncher = rememberLauncherForActivityResult(
@@ -122,15 +150,90 @@ fun MoneyScreen(
     val pendingCount = remember(financialEvents) {
         financialEvents.count { it.syncStatus != "SERVER_CONFIRMED" }
     }
-    val visibleEvents = remember(financialEvents) { financialEvents.take(40) }
+    val visibleEvents = remember(financialEvents) { financialEvents.take(50) }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        if (latestUnlinkedInflow != null) {
-            item(key = "unlinked_mpesa_inflow_${latestUnlinkedInflow.eventId}") {
+        item(key = "business_balance_summary") {
+            EmofahCard(
+                containerColor = colors.surfaceCard,
+                borderColor = colors.borderStrong,
+                shadowElevation = 1.dp,
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Business Balance (Classified)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textMuted,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Ksh ${balanceReport.businessBalance.roundToInt()}",
+                            style = MaterialTheme.typography.headlineSmall.tabular(),
+                            fontWeight = FontWeight.Bold,
+                            color = colors.textPrimary,
+                        )
+                    }
+                    EmofahStatusBadge(
+                        text = if (pendingSharedTransactions.isEmpty()) {
+                            "All classified"
+                        } else {
+                            "${pendingSharedTransactions.size} awaiting"
+                        },
+                        tone = if (pendingSharedTransactions.isEmpty()) {
+                            EmofahBadgeTone.SUCCESS
+                        } else {
+                            EmofahBadgeTone.WARNING
+                        },
+                        leadingDot = true,
+                    )
+                }
+
+                HorizontalDivider(color = colors.borderSubtle)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Products (${balanceReport.businessProductCount}): Ksh ${balanceReport.businessProductNet.roundToInt()}",
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = colors.textPrimary,
+                    )
+                    Text(
+                        text = "Services (${balanceReport.businessServiceCount}): Ksh ${balanceReport.businessServiceNet.roundToInt()}",
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        color = colors.textPrimary,
+                    )
+                }
+                Text(
+                    text = "${balanceReport.pendingCount} awaiting · ${balanceReport.nonBusinessCount} personal/excluded (Ksh 0 in balance)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textMuted,
+                )
+            }
+        }
+
+        if (pendingSharedTransactions.isNotEmpty()) {
+            items(
+                items = pendingSharedTransactions.take(8),
+                key = { "pending_cls_${it.eventId}" },
+            ) { pendingEvt ->
+                val isInflow = pendingEvt.direction.equals("INFLOW", ignoreCase = true)
+                val directionLabel = when (pendingEvt.direction.uppercase()) {
+                    "INFLOW" -> "Received"
+                    "OUTFLOW" -> "Sent"
+                    else -> "Transfer"
+                }
+                val isServerConfirmed = pendingEvt.syncStatus == SyncState.SERVER_CONFIRMED
                 EmofahCard(
                     containerColor = colors.infoContainer,
                     borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
@@ -142,17 +245,22 @@ fun MoneyScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         EmofahStatusBadge(
-                            text = "Unlinked M-Pesa Inflow",
-                            tone = EmofahBadgeTone.INFO,
+                            text = if (isServerConfirmed) {
+                                "Saved in Supabase · Awaiting Classification"
+                            } else {
+                                "Saved Locally · Uploading"
+                            },
+                            tone = if (isServerConfirmed) EmofahBadgeTone.INFO else EmofahBadgeTone.WARNING,
                             leadingDot = true,
                         )
-                        TextButton(onClick = { onDismissMpesaInflow(latestUnlinkedInflow) }) {
-                            Text("Hide")
-                        }
+                        EmofahStatusBadge(
+                            text = directionLabel,
+                            tone = if (isInflow) EmofahBadgeTone.SUCCESS else EmofahBadgeTone.DANGER,
+                        )
                     }
 
                     Text(
-                        text = "Ksh ${latestUnlinkedInflow.amount.roundToInt()}",
+                        text = "${if (isInflow) "+" else "-"} Ksh ${pendingEvt.amount.roundToInt()}",
                         style = MaterialTheme.typography.headlineSmall.tabular(),
                         fontWeight = FontWeight.Bold,
                         color = colors.textPrimary,
@@ -160,11 +268,12 @@ fun MoneyScreen(
 
                     Text(
                         text = buildString {
-                            append("From ${latestUnlinkedInflow.counterparty?.takeIf { it.isNotBlank() } ?: "Customer"}")
-                            latestUnlinkedInflow.transactionReference?.takeIf { it.isNotBlank() }?.let {
+                            append(if (isInflow) "From " else "To ")
+                            append(pendingEvt.counterparty?.takeIf { it.isNotBlank() } ?: "Counterparty")
+                            pendingEvt.transactionReference?.takeIf { it.isNotBlank() }?.let {
                                 append(" · Ref $it")
                             }
-                            append(". Choose what this payment is for:")
+                            append(" · ${timeFormat.format(Date(pendingEvt.eventTimestampEpochMs))}")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.textPrimary,
@@ -175,22 +284,36 @@ fun MoneyScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
-                            onClick = { onUseMpesaForSale(latestUnlinkedInflow) },
+                            onClick = { linkingProductTarget = pendingEvt },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp),
+                                .height(44.dp),
                         ) {
-                            Text("Record Sale", fontWeight = FontWeight.SemiBold)
+                            Text("Link Product", fontWeight = FontWeight.SemiBold, maxLines = 1)
                         }
                         OutlinedButton(
-                            onClick = { onUseMpesaForService(latestUnlinkedInflow) },
+                            onClick = { onUseMpesaForService(pendingEvt) },
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp),
+                                .height(44.dp),
                         ) {
-                            Text("Record Service", fontWeight = FontWeight.SemiBold)
+                            Text("Link Service", fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(
+                            onClick = {
+                                removalReason = "Personal / non-business transaction"
+                                removingBusinessTarget = pendingEvt
+                            },
+                        ) {
+                            Text("Remove from Business Transactions")
                         }
                     }
                 }
@@ -593,14 +716,18 @@ fun MoneyScreen(
                 val feeCost = parsedObj?.takeIf { !it.isNull("transaction_cost") }?.optDouble("transaction_cost")
                 val balanceAfter = parsedObj?.takeIf { !it.isNull("new_balance") }?.optDouble("new_balance")
                 val existingLink = MpesaInflowAttributionPolicy.findExistingLink(evt, mpesaInflowLinks)
-                val isLinkableInflow = MpesaInflowAttributionPolicy.isMpesaInflowEvent(evt) && existingLink == null
+                val effectiveStatus = BusinessBalanceCalculator.effectiveStatus(evt)
+                val isPendingClass = BusinessBalanceCalculator.isPendingClassification(evt) && existingLink == null
                 val (statusLabel, statusTone) = when {
-                    existingLink?.target == MpesaInflowLinkTarget.SALE -> "Linked to Sale" to EmofahBadgeTone.SUCCESS
-                    existingLink?.target == MpesaInflowLinkTarget.SERVICE -> "Linked to Service" to EmofahBadgeTone.INFO
-                    existingLink?.target == MpesaInflowLinkTarget.DISMISSED -> "Marked Other" to EmofahBadgeTone.NEUTRAL
+                    effectiveStatus == ClassificationState.BUSINESS_PRODUCT ||
+                        existingLink?.target == MpesaInflowLinkTarget.SALE -> "Product Sale" to EmofahBadgeTone.SUCCESS
+                    effectiveStatus == ClassificationState.BUSINESS_SERVICE ||
+                        existingLink?.target == MpesaInflowLinkTarget.SERVICE -> "Service" to EmofahBadgeTone.INFO
+                    effectiveStatus == ClassificationState.NON_BUSINESS ||
+                        existingLink?.target == MpesaInflowLinkTarget.DISMISSED -> "Non-Business (Excluded)" to EmofahBadgeTone.NEUTRAL
                     evt.reviewStatus == "NEEDS_MANUAL_FIX" -> "Check Details" to EmofahBadgeTone.DANGER
-                    evt.syncStatus == SyncState.SERVER_CONFIRMED -> "Uploaded" to EmofahBadgeTone.SUCCESS
-                    else -> "Saved on Phone" to EmofahBadgeTone.WARNING
+                    evt.syncStatus == SyncState.SERVER_CONFIRMED -> "Awaiting Classification" to EmofahBadgeTone.WARNING
+                    else -> "Saved Locally" to EmofahBadgeTone.WARNING
                 }
 
                 EmofahCard(contentPadding = PaddingValues(14.dp)) {
@@ -619,7 +746,7 @@ fun MoneyScreen(
                             Text(
                                 text = listOfNotNull(
                                     channelLabel,
-                                    evt.counterparty ?: if (evt.provisionalCategory == "PENDING_DESKTOP_RULES") "Waiting for office" else evt.provisionalCategory,
+                                    evt.counterparty ?: if (isPendingClass) "Awaiting classification" else evt.classificationStatus,
                                     accountRef?.let { "Tel/Acc: $it" },
                                 ).joinToString(" · "),
                                 style = MaterialTheme.typography.bodySmall,
@@ -651,32 +778,49 @@ fun MoneyScreen(
                         )
                     }
 
-                    if (isLinkableInflow) {
+                    if (isPendingClass) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             OutlinedButton(
-                                onClick = { onUseMpesaForSale(evt) },
-                                shape = RoundedCornerShape(12.dp),
+                                onClick = { linkingProductTarget = evt },
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.weight(1f),
                             ) {
-                                Text("Use for Sale")
+                                Text("Product", maxLines = 1)
                             }
                             OutlinedButton(
                                 onClick = { onUseMpesaForService(evt) },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.weight(1f),
                             ) {
-                                Text("Use for Service")
+                                Text("Service", maxLines = 1)
+                            }
+                            TextButton(
+                                onClick = {
+                                    removalReason = "Personal / non-business transaction"
+                                    removingBusinessTarget = evt
+                                },
+                            ) {
+                                Text("Remove", maxLines = 1)
                             }
                         }
-                    } else if (existingLink != null && existingLink.summary.isNotBlank()) {
-                        Text(
-                            text = existingLink.summary,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                    } else {
+                        val linkedSummary = listOfNotNull(
+                            evt.linkedProductName?.let { name ->
+                                evt.linkedQuantity?.let { qty -> "$name ×$qty" } ?: name
+                            },
+                            evt.linkedSaleId?.let { "Sale #$it" },
+                            evt.classificationNote,
+                        ).joinToString(" · ").ifBlank { existingLink?.summary.orEmpty() }
+                        if (linkedSummary.isNotBlank()) {
+                            Text(
+                                text = linkedSummary,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
 
                     Row(
@@ -684,7 +828,7 @@ fun MoneyScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            text = if (evt.syncStatus == SyncState.SERVER_CONFIRMED) "Uploaded" else "Saved on Phone",
+                            text = if (evt.syncStatus == SyncState.SERVER_CONFIRMED) "Saved in Supabase" else "Saved on Phone (Queued)",
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.textMuted,
                         )
@@ -697,5 +841,140 @@ fun MoneyScreen(
                 }
             }
         }
+    }
+
+    linkingProductTarget?.let { targetEvent ->
+        AlertDialog(
+            onDismissRequest = { linkingProductTarget = null },
+            title = { Text("Link to Product Sale") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Payment: Ksh ${targetEvent.amount.roundToInt()}" +
+                            (targetEvent.transactionReference?.let { " · Ref $it" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Button(
+                        onClick = {
+                            linkingProductTarget = null
+                            onUseMpesaForSale(targetEvent)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Create New Product Sale & Link")
+                    }
+                    if (unlinkedRemoteSales.isNotEmpty()) {
+                        HorizontalDivider(color = colors.borderSubtle)
+                        Text(
+                            text = "Or attach to existing unlinked sale (no double stock deduction):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted,
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            unlinkedRemoteSales.take(6).forEach { sale ->
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, colors.borderStrong),
+                                    color = colors.surfaceCard,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            linkingProductTarget = null
+                                            onLinkExistingSaleToTransaction(
+                                                targetEvent,
+                                                sale.saleId,
+                                                sale.productId,
+                                                sale.productName,
+                                                sale.qtySold,
+                                            )
+                                        },
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Sale #${sale.saleId} · ${sale.productName}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = "Qty ${sale.qtySold}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = colors.textMuted,
+                                            )
+                                        }
+                                        Text(
+                                            text = "Ksh ${sale.totalPrice.roundToInt()}",
+                                            style = MaterialTheme.typography.labelMedium.tabular(),
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { linkingProductTarget = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    removingBusinessTarget?.let { targetEvent ->
+        AlertDialog(
+            onDismissRequest = { removingBusinessTarget = null },
+            title = { Text("Remove from Business Records") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "This marks Ksh ${targetEvent.amount.roundToInt()} as Non-Business and excludes it from Business Balance. The original captured payment and classification history stay preserved for audit.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textMuted,
+                    )
+                    OutlinedTextField(
+                        value = removalReason,
+                        onValueChange = { removalReason = it },
+                        label = { Text("Audit Reason") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val target = targetEvent
+                        val note = removalReason.trim().ifBlank { "Personal / non-business transaction" }
+                        removingBusinessTarget = null
+                        onRemoveFromBusiness(target, note)
+                    },
+                ) {
+                    Text("Confirm Exclude")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { removingBusinessTarget = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }

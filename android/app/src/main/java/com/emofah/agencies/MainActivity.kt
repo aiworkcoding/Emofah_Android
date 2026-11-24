@@ -94,6 +94,10 @@ import com.emofah.agencies.financial.MpesaInflowAttributionPolicy
 import com.emofah.agencies.financial.MpesaInflowAttributionStore
 import com.emofah.agencies.financial.MpesaInflowLinkTarget
 import com.emofah.agencies.financial.MpesaMonitoringRepository
+import com.emofah.agencies.financial.RemoteRecentSale
+import com.emofah.agencies.financial.SharedClassificationOutcome
+import com.emofah.agencies.financial.SharedTransactionSyncRepository
+import com.emofah.agencies.financial.SharedTransactionsFetchOutcome
 import com.emofah.agencies.stock.StockAdjustmentDraft
 import com.emofah.agencies.stock.StockAdjustmentRepository
 import com.emofah.agencies.stock.StockAdjustmentResult
@@ -162,6 +166,8 @@ import com.emofah.agencies.ui.screens.UnknownProductRegistrationScreen
 import com.emofah.agencies.ui.theme.EmofahTheme
 import com.emofah.agencies.ui.theme.emofahColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
@@ -286,6 +292,15 @@ fun EmofahAppShell(
             onOfflineEventQueued = { SyncScheduler.enqueueImmediateSync(app) },
         )
     }
+    val sharedTransactionSyncRepository = remember(app, identityProvider, connectivityChecker, mpesaAttributionStore) {
+        SharedTransactionSyncRepository(
+            database = app.database,
+            identityProvider = identityProvider,
+            connectivityChecker = connectivityChecker,
+            attributionStore = mpesaAttributionStore,
+            onOfflineEventQueued = { SyncScheduler.enqueueImmediateSync(app) },
+        )
+    }
     val receiptExtractionClient = remember { SupabaseReceiptExtractionClient() }
     val purchaseRepository = remember(app, repository, identityProvider, connectivityChecker) {
         PurchaseRepository(
@@ -341,6 +356,9 @@ fun EmofahAppShell(
                 } else {
                     orderRepository.unmarkOrderConverted(orderId)
                 }
+            },
+            onTransactionClassified = { eventId ->
+                EmofahNotificationManager.cancelTransactionNotification(app, eventId)
             },
         )
     }
@@ -441,9 +459,11 @@ fun EmofahAppShell(
     val financialEvents by mpesaMonitoringRepository.observePendingFinancialEvents()
         .collectAsState(initial = emptyList())
     val mpesaLinks by mpesaAttributionStore.linksFlow.collectAsState()
-    val latestUnlinkedMpesaInflow = remember(financialEvents, mpesaLinks) {
-        MpesaInflowAttributionPolicy.findLatestUnlinkedInflow(financialEvents, mpesaLinks)
+    val pendingSharedTransactions = remember(financialEvents, mpesaLinks) {
+        MpesaInflowAttributionPolicy.findPendingSharedTransactions(financialEvents, mpesaLinks)
     }
+    val latestUnlinkedMpesaInflow = pendingSharedTransactions.firstOrNull()
+    var remoteRecentSales by remember { mutableStateOf<List<RemoteRecentSale>>(emptyList()) }
     var activeMpesaSaleEvent by remember { mutableStateOf<PendingFinancialEventEntity?>(null) }
     var activeMpesaServiceEvent by remember { mutableStateOf<PendingFinancialEventEntity?>(null) }
     var financialMonitoringState by remember { mutableStateOf(financialMonitoringPrefs.readState()) }
@@ -518,6 +538,10 @@ fun EmofahAppShell(
         }
         if (!summary.skippedOffline && summary.authBlockedCount == 0) {
             auditSyncRepository.flushPendingAudits()
+            val sharedRes = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+            if (sharedRes is SharedTransactionsFetchOutcome.Success) {
+                remoteRecentSales = sharedRes.recentSales
+            }
         }
         EmofahNotificationManager.notifySyncAttentionIfNeeded(app, summary)
         val fetchedOrders = orderRepository.fetchOrders(
@@ -533,6 +557,20 @@ fun EmofahAppShell(
         reliabilitySnapshot = reliabilityRecoveryManager.inspectHealthSnapshot()
         if (summary.retryableCount > 0 || summary.skippedOffline) {
             SyncScheduler.enqueueImmediateSync(app)
+        }
+    }
+
+    LaunchedEffect(isDeviceOnline, sharedTransactionSyncRepository, syncQueueProcessor) {
+        if (!isDeviceOnline) return@LaunchedEffect
+        while (isActive) {
+            val queueSummary = syncQueueProcessor.processPendingQueue(maxEventsPerPass = 15)
+            if (!queueSummary.skippedOffline && queueSummary.authBlockedCount == 0) {
+                val res = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                if (res is SharedTransactionsFetchOutcome.Success) {
+                    remoteRecentSales = res.recentSales
+                }
+            }
+            delay(15_000L)
         }
     }
 
@@ -669,20 +707,34 @@ fun EmofahAppShell(
         navigateTo(EmofahDestination.Home)
     }
 
-    fun dismissMpesaInflow(event: PendingFinancialEventEntity) {
-        val linked = mpesaAttributionStore.tryRecordLink(
-            event = event,
-            target = MpesaInflowLinkTarget.DISMISSED,
-            linkedRecordId = "dismissed",
-            summary = "Not a shop sale or service",
-        )
-        if (activeMpesaSaleEvent?.eventId == event.eventId) activeMpesaSaleEvent = null
-        if (activeMpesaServiceEvent?.eventId == event.eventId) activeMpesaServiceEvent = null
-        financialUiMessage = if (linked) {
-            "M-Pesa payment marked as other / not a sale."
-        } else {
-            "M-Pesa payment was already handled."
+    fun removeTransactionFromBusiness(
+        event: PendingFinancialEventEntity,
+        reason: String = "Personal / non-business transaction",
+    ) {
+        scope.launch {
+            val outcome = sharedTransactionSyncRepository.classifyAsNonBusiness(
+                event = event,
+                reason = reason,
+                appContext = app,
+            )
+            if (activeMpesaSaleEvent?.eventId == event.eventId) activeMpesaSaleEvent = null
+            if (activeMpesaServiceEvent?.eventId == event.eventId) activeMpesaServiceEvent = null
+            financialUiMessage = when (outcome) {
+                is SharedClassificationOutcome.ClassifiedOnline -> {
+                    val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                    if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                        remoteRecentSales = refreshed.recentSales
+                    }
+                    outcome.message
+                }
+                is SharedClassificationOutcome.QueuedOffline -> outcome.message
+                is SharedClassificationOutcome.Rejected -> outcome.message
+            }
         }
+    }
+
+    fun dismissMpesaInflow(event: PendingFinancialEventEntity) {
+        removeTransactionFromBusiness(event, "Removed from business transactions on Android")
     }
 
     LaunchedEffect(pendingNotificationRoute) {
@@ -815,25 +867,46 @@ fun EmofahAppShell(
                             isSubmittingService = true
                             val linkedMpesa = activeMpesaServiceEvent
                             scope.launch {
-                                val outcome = serviceOperationRepository.recordServiceOperation(draft)
-                                serviceOperationResult = outcome
-                                if (linkedMpesa != null &&
-                                    (outcome is ServiceOperationResult.SuccessOnline ||
-                                        outcome is ServiceOperationResult.SavedOffline)
-                                ) {
-                                    val recId = when (outcome) {
-                                        is ServiceOperationResult.SuccessOnline -> outcome.serverServiceId
-                                        is ServiceOperationResult.SavedOffline -> outcome.clientServiceId
-                                        else -> draft.clientServiceId
+                                val outcome = if (linkedMpesa != null) {
+                                    when (
+                                        val clsOutcome = sharedTransactionSyncRepository.classifyAsService(
+                                            event = linkedMpesa,
+                                            draft = draft,
+                                            appContext = app,
+                                        )
+                                    ) {
+                                        is SharedClassificationOutcome.ClassifiedOnline -> {
+                                            activeMpesaServiceEvent = null
+                                            val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                            if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                                                remoteRecentSales = refreshed.recentSales
+                                            }
+                                            ServiceOperationResult.SuccessOnline(
+                                                serverServiceId = clsOutcome.event.linkedServiceId ?: draft.clientServiceId,
+                                                serviceLabel = draft.serviceType.label,
+                                                totalRevenue = draft.effectiveRevenue,
+                                                stockDeductedCount = 0,
+                                                alreadyCommitted = clsOutcome.alreadyClassifiedByOtherDevice,
+                                            )
+                                        }
+                                        is SharedClassificationOutcome.QueuedOffline -> {
+                                            activeMpesaServiceEvent = null
+                                            ServiceOperationResult.SavedOffline(
+                                                clientServiceId = draft.clientServiceId,
+                                                serviceLabel = draft.serviceType.label,
+                                                totalRevenue = draft.effectiveRevenue,
+                                                stockDeductedCount = 0,
+                                                reason = clsOutcome.message,
+                                            )
+                                        }
+                                        is SharedClassificationOutcome.Rejected -> {
+                                            ServiceOperationResult.Rejected(clsOutcome.message)
+                                        }
                                     }
-                                    mpesaAttributionStore.tryRecordLink(
-                                        event = linkedMpesa,
-                                        target = MpesaInflowLinkTarget.SERVICE,
-                                        linkedRecordId = recId,
-                                        summary = "${draft.serviceType.label} · Ksh ${draft.effectiveRevenue.toInt()}",
-                                    )
-                                    activeMpesaServiceEvent = null
+                                } else {
+                                    serviceOperationRepository.recordServiceOperation(draft)
                                 }
+                                serviceOperationResult = outcome
                                 isSubmittingService = false
                             }
                         },
@@ -878,6 +951,7 @@ fun EmofahAppShell(
                         authState = authState,
                         onOpenAuth = { showAuthDialog = true },
                         unlinkedMpesaInflow = latestUnlinkedMpesaInflow,
+                        pendingClassificationTotalCount = pendingSharedTransactions.size,
                         onUseMpesaForSale = ::useMpesaForSale,
                         onUseMpesaForService = ::useMpesaForService,
                         onDismissMpesaInflow = ::dismissMpesaInflow,
@@ -1147,19 +1221,31 @@ fun EmofahAppShell(
                                 (outcome is RecordSaleOutcome.SuccessOnline ||
                                     outcome is RecordSaleOutcome.SavedOffline)
                             ) {
-                                val recId = when (outcome) {
-                                    is RecordSaleOutcome.SuccessOnline -> outcome.serverSaleId.toString()
-                                    is RecordSaleOutcome.SavedOffline -> outcome.clientSaleId
-                                    else -> draft.clientSaleId
-                                }
-                                val linkedOk = mpesaAttributionStore.tryRecordLink(
+                                val existingSaleId = (outcome as? RecordSaleOutcome.SuccessOnline)?.serverSaleId
+                                val clsOutcome = sharedTransactionSyncRepository.classifyAsProduct(
                                     event = linkedMpesa,
-                                    target = MpesaInflowLinkTarget.SALE,
-                                    linkedRecordId = recId,
-                                    summary = "${draft.productName} x${draft.quantity}",
+                                    productId = draft.productId,
+                                    quantity = draft.quantity,
+                                    existingSaleId = existingSaleId,
+                                    existingClientSaleId = draft.clientSaleId,
+                                    productNameHint = draft.productName,
+                                    unitSellPrice = draft.effectiveUnitSellPrice,
+                                    paymentMethod = draft.paymentMethod.name,
+                                    note = "Linked to sale on Android",
+                                    appContext = app,
                                 )
-                                if (linkedOk) {
-                                    linkedMpesaNote = " Linked to M-Pesa ${linkedMpesa.transactionReference ?: "payment"}."
+                                linkedMpesaNote = when (clsOutcome) {
+                                    is SharedClassificationOutcome.ClassifiedOnline -> {
+                                        val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                        if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                                            remoteRecentSales = refreshed.recentSales
+                                        }
+                                        " ${clsOutcome.message}"
+                                    }
+                                    is SharedClassificationOutcome.QueuedOffline ->
+                                        " Linked locally (${linkedMpesa.transactionReference ?: "payment"}) — will sync automatically."
+                                    is SharedClassificationOutcome.Rejected ->
+                                        " (${clsOutcome.message})"
                                 }
                                 activeMpesaSaleEvent = null
                             }
@@ -1505,9 +1591,37 @@ fun EmofahAppShell(
                         statusMessage = financialUiMessage,
                         isSyncing = isManualSyncing,
                         mpesaInflowLinks = mpesaLinks,
+                        remoteRecentSales = remoteRecentSales,
                         onUseMpesaForSale = ::useMpesaForSale,
                         onUseMpesaForService = ::useMpesaForService,
                         onDismissMpesaInflow = ::dismissMpesaInflow,
+                        onLinkExistingSaleToTransaction = { evt, saleId, productId, productName, qty ->
+                            scope.launch {
+                                val clsOutcome = sharedTransactionSyncRepository.classifyAsProduct(
+                                    event = evt,
+                                    productId = productId,
+                                    quantity = qty,
+                                    existingSaleId = saleId,
+                                    productNameHint = productName,
+                                    note = "Linked to existing Sale #$saleId",
+                                    appContext = app,
+                                )
+                                financialUiMessage = when (clsOutcome) {
+                                    is SharedClassificationOutcome.ClassifiedOnline -> {
+                                        val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                        if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                                            remoteRecentSales = refreshed.recentSales
+                                        }
+                                        clsOutcome.message
+                                    }
+                                    is SharedClassificationOutcome.QueuedOffline -> clsOutcome.message
+                                    is SharedClassificationOutcome.Rejected -> clsOutcome.message
+                                }
+                            }
+                        },
+                        onRemoveFromBusiness = { evt, reason ->
+                            removeTransactionFromBusiness(evt, reason)
+                        },
                         onGrantConsent = {
                             financialMonitoringState = financialMonitoringPrefs.grantConsent(
                                 actorId = identityProvider.getActorId()
@@ -1535,10 +1649,16 @@ fun EmofahAppShell(
                                 financialUiMessage = when (outcome) {
                                     is MpesaCaptureOutcome.Captured -> {
                                         val evt = outcome.event
-                                        if (MpesaInflowAttributionPolicy.isMpesaInflowEvent(evt)) {
-                                            "M-Pesa Received: Ksh ${evt.amount.toInt()} (${evt.transactionReference ?: "M-Pesa"}) saved. Choose Sale or Service below."
+                                        val uploaded = sharedTransactionSyncRepository.uploadCapturedEventImmediately(evt.eventId)
+                                        EmofahNotificationManager.notifyTransactionPendingClassification(app, evt)
+                                        if (uploaded) {
+                                            val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                            if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                                                remoteRecentSales = refreshed.recentSales
+                                            }
+                                            "Saved in Supabase (${evt.transactionReference ?: "M-Pesa"} · Ksh ${evt.amount.toInt()}). Classify on Android or Desktop."
                                         } else {
-                                            "Saved M-Pesa ${evt.direction} Ksh ${evt.amount.toInt()} (${evt.transactionReference ?: "M-Pesa"})."
+                                            "Saved locally (${evt.transactionReference ?: "M-Pesa"} · Ksh ${evt.amount.toInt()}). Will upload to Supabase automatically."
                                         }
                                     }
                                     is MpesaCaptureOutcome.DuplicateIgnored ->
@@ -1559,8 +1679,19 @@ fun EmofahAppShell(
                                     )
                                 )
                                 financialUiMessage = when (outcome) {
-                                    is ManualFinancialOutcome.SavedLocally ->
-                                        "Saved Ksh ${outcome.event.amount.toInt()} (${outcome.event.direction}). Will sync online automatically."
+                                    is ManualFinancialOutcome.SavedLocally -> {
+                                        val uploaded = sharedTransactionSyncRepository.uploadCapturedEventImmediately(outcome.event.eventId)
+                                        EmofahNotificationManager.notifyTransactionPendingClassification(app, outcome.event)
+                                        if (uploaded) {
+                                            val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                            if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                                                remoteRecentSales = refreshed.recentSales
+                                            }
+                                            "Saved Ksh ${outcome.event.amount.toInt()} (${outcome.event.direction}) in Supabase · awaiting classification."
+                                        } else {
+                                            "Saved Ksh ${outcome.event.amount.toInt()} (${outcome.event.direction}) locally. Will sync to Supabase automatically."
+                                        }
+                                    }
                                     is ManualFinancialOutcome.Rejected ->
                                         outcome.message
                                 }
@@ -1571,13 +1702,19 @@ fun EmofahAppShell(
                             isManualSyncing = true
                             scope.launch {
                                 val result = syncQueueProcessor.processPendingQueue()
+                                if (!result.skippedOffline && result.authBlockedCount == 0) {
+                                    val refreshed = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                    if (refreshed is SharedTransactionsFetchOutcome.Success) {
+                                        remoteRecentSales = refreshed.recentSales
+                                    }
+                                }
                                 syncTelemetry.recordAttempt(System.currentTimeMillis(), result)
                                 syncCheckpoint = syncTelemetry.readCheckpoint()
                                 financialUiMessage = when {
                                     result.skippedOffline -> "No internet — saved records will upload automatically once online."
-                                    result.syncedCount > 0 -> "Uploaded ${result.syncedCount} saved record(s)."
+                                    result.syncedCount > 0 -> "Uploaded ${result.syncedCount} saved record(s) & refreshed classifications."
                                     result.conflictCount > 0 -> "Sync finished with ${result.conflictCount} issue(s). Check Activity tab."
-                                    else -> syncCheckpoint.lastMessage ?: "Everything is up to date."
+                                    else -> "Shared transactions & classifications are up to date."
                                 }
                                 isManualSyncing = false
                             }
@@ -1773,6 +1910,10 @@ fun EmofahAppShell(
                             if (!result.skippedOffline && result.authBlockedCount == 0) {
                                 val auditFlush = auditSyncRepository.flushPendingAudits()
                                 auditStatusMessage = auditFlush.message
+                                val sharedRes = sharedTransactionSyncRepository.refreshSharedTransactionsFromServer(app)
+                                if (sharedRes is SharedTransactionsFetchOutcome.Success) {
+                                    remoteRecentSales = sharedRes.recentSales
+                                }
                                 repository.syncCatalogueAndRebuildIndex(forceNetwork = true)
                                 val refreshed = orderRepository.fetchOrders(
                                     catalogueProducts = cachedProducts,

@@ -7,6 +7,7 @@ import android.provider.Telephony
 import com.emofah.agencies.data.local.EmofahDatabase
 import com.emofah.agencies.data.sync.SyncScheduler
 import com.emofah.agencies.notifications.EmofahNotificationManager
+import com.emofah.agencies.sales.AndroidConnectivityChecker
 import com.emofah.agencies.sales.DeviceIdentityProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,8 @@ import kotlinx.coroutines.launch
 /**
  * Stage 5.2 – 5.5 — Consent-gated Android SMS BroadcastReceiver for M-Pesa notifications.
  * Exits immediately without inspecting messages unless the user has granted explicit monitoring consent.
- * Queues captured financial events for reliable WorkManager sync to Supabase.
+ * Immediately persists captured events locally + attempts Supabase upload as PENDING_CLASSIFICATION
+ * before notifying the user.
  */
 class MpesaSmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -44,14 +46,25 @@ class MpesaSmsReceiver : BroadcastReceiver() {
         val appContext = context.applicationContext
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val database = EmofahDatabase.getInstance(appContext)
+                val connectivity = AndroidConnectivityChecker(appContext)
+                val identity = DeviceIdentityProvider(appContext)
                 val repo = MpesaMonitoringRepository(
-                    database = EmofahDatabase.getInstance(appContext),
+                    database = database,
                     monitoringPrefs = prefs,
                     onOfflineEventQueued = {
                         SyncScheduler.enqueueImmediateSync(appContext)
                     },
                 )
-                val identity = DeviceIdentityProvider(appContext)
+                val sharedSyncRepo = SharedTransactionSyncRepository(
+                    database = database,
+                    identityProvider = identity,
+                    connectivityChecker = connectivity,
+                    attributionStore = MpesaInflowAttributionStore(appContext),
+                    onOfflineEventQueued = {
+                        SyncScheduler.enqueueImmediateSync(appContext)
+                    },
+                )
                 for ((sender, bodyBuilder) in groupedBySender) {
                     val outcome = repo.processIncomingSms(
                         sender = sender,
@@ -61,10 +74,9 @@ class MpesaSmsReceiver : BroadcastReceiver() {
                         requireConsentCheck = true,
                         allowManualPasteOverride = false,
                     )
-                    if (outcome is MpesaCaptureOutcome.Captured &&
-                        outcome.event.direction.equals("INFLOW", ignoreCase = true)
-                    ) {
-                        EmofahNotificationManager.notifyMpesaInflowReceived(
+                    if (outcome is MpesaCaptureOutcome.Captured) {
+                        sharedSyncRepo.uploadCapturedEventImmediately(outcome.event.eventId)
+                        EmofahNotificationManager.notifyTransactionPendingClassification(
                             context = appContext,
                             event = outcome.event,
                         )

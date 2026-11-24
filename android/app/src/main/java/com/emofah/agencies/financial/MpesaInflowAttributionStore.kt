@@ -58,6 +58,25 @@ object MpesaInflowAttributionPolicy {
             .maxByOrNull { it.eventTimestampEpochMs }
     }
 
+    fun findPendingSharedTransactions(
+        events: List<PendingFinancialEventEntity>,
+        linksByEventId: Map<String, MpesaInflowLinkRecord> = emptyMap(),
+    ): List<PendingFinancialEventEntity> {
+        return events
+            .filter { evt ->
+                BusinessBalanceCalculator.isPendingClassification(evt) &&
+                    findExistingLink(evt, linksByEventId) == null
+            }
+            .sortedByDescending { it.eventTimestampEpochMs }
+    }
+
+    fun findLatestPendingSharedTransaction(
+        events: List<PendingFinancialEventEntity>,
+        linksByEventId: Map<String, MpesaInflowLinkRecord> = emptyMap(),
+    ): PendingFinancialEventEntity? {
+        return findPendingSharedTransactions(events, linksByEventId).firstOrNull()
+    }
+
     fun encodeLinksToJson(links: Collection<MpesaInflowLinkRecord>): String {
         val arr = JSONArray()
         for (link in links.sortedByDescending { it.linkedAtEpochMs }.take(300)) {

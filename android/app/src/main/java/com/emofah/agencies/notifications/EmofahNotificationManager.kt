@@ -99,6 +99,46 @@ object EmofahNotificationManager {
         manager.createNotificationChannels(listOf(ordersChannel, syncChannel, stockChannel, mpesaChannel))
     }
 
+    fun computeTransactionNotificationId(eventId: String): Int {
+        return NOTIFICATION_ID_MPESA_BASE + ((eventId.hashCode() and 0x7FFFFFFF) % 500)
+    }
+
+    fun cancelTransactionNotification(context: Context, eventId: String) {
+        runCatching {
+            NotificationManagerCompat.from(context.applicationContext)
+                .cancel(computeTransactionNotificationId(eventId))
+        }
+    }
+
+    fun notifyTransactionPendingClassification(
+        context: Context,
+        event: PendingFinancialEventEntity,
+    ): Boolean {
+        val prefs = NotificationPrefs(context)
+        if (!prefs.readState().mpesaInflowAlertsEnabled) return false
+
+        val directionVerb = when (event.direction.uppercase()) {
+            "OUTFLOW" -> "Sent"
+            "TRANSFER" -> "Transfer"
+            else -> "Received"
+        }
+        val counterpartyLabel = event.counterparty?.takeIf { it.isNotBlank() } ?: "M-Pesa"
+        val refPart = event.transactionReference?.takeIf { it.isNotBlank() }?.let { " · Ref $it" }.orEmpty()
+        val title = "Classify M-Pesa $directionVerb: Ksh ${event.amount.roundToInt()}"
+        val body = "Saved to account · $counterpartyLabel$refPart. Tap to link Product, Service, or Remove."
+        val notifId = computeTransactionNotificationId(event.eventId)
+
+        return postNotification(
+            context = context,
+            channelId = CHANNEL_MPESA_INFLOW,
+            notificationId = notifId,
+            title = title,
+            body = body,
+            targetDestination = EmofahDestination.Money,
+            priority = NotificationCompat.PRIORITY_HIGH,
+        )
+    }
+
     fun notifyMpesaInflowReceived(
         context: Context,
         event: PendingFinancialEventEntity,
@@ -110,8 +150,8 @@ object EmofahNotificationManager {
         val senderLabel = event.counterparty?.takeIf { it.isNotBlank() } ?: "Customer"
         val refPart = event.transactionReference?.takeIf { it.isNotBlank() }?.let { " · Ref $it" }.orEmpty()
         val title = "M-Pesa Received: Ksh ${event.amount.roundToInt()}"
-        val body = "From $senderLabel$refPart. Tap to record Sale or Service."
-        val notifId = NOTIFICATION_ID_MPESA_BASE + ((event.eventId.hashCode() and 0x7FFFFFFF) % 500)
+        val body = "From $senderLabel$refPart · Saved automatically. Tap to classify."
+        val notifId = computeTransactionNotificationId(event.eventId)
 
         return postNotification(
             context = context,

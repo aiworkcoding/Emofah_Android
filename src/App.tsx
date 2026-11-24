@@ -9,7 +9,11 @@ import { WorkspaceView } from './components/WorkspaceView';
 import { AndroidHubView } from './components/AndroidHubView';
 import { ProductCatalogView } from './components/ProductCatalogView';
 import { BackendSetupView } from './components/BackendSetupView';
+import { PendingTransactionBanner } from './components/PendingTransactionBanner';
+import { TransactionsView, type ClassificationModalMode } from './components/TransactionsView';
+import { useSharedTransactions } from './hooks/useSharedTransactions';
 import { useTheme } from './hooks/useTheme';
+import type { SharedFinancialTransaction } from './services/financialBalance';
 import type { AppPreferences, NavTab, WorkspaceItem } from './types/app';
 
 const PREFS_STORAGE_KEY = 'emofah-preferences';
@@ -54,6 +58,7 @@ const INITIAL_ITEMS: WorkspaceItem[] = [
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'Home', icon: Home },
+  { id: 'money', label: 'Transactions', icon: DollarSign },
   { id: 'android-hub', label: 'Android Preview', icon: Smartphone },
   { id: 'catalog', label: 'Catalogue', icon: Package },
   { id: 'backend', label: 'Backend Setup', icon: Database },
@@ -71,6 +76,11 @@ const BLUR_VALUE_MAP = {
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const { preference, resolvedTheme, setPreference, toggleQuick } = useTheme();
+  const sharedTx = useSharedTransactions();
+  const [pendingClassificationRequest, setPendingClassificationRequest] = useState<{
+    tx: SharedFinancialTransaction;
+    mode: ClassificationModalMode;
+  } | null>(null);
 
   const [preferences, setPreferences] = useState<AppPreferences>(() => {
     try {
@@ -216,7 +226,12 @@ export default function App() {
                           : 'text-current'
                       }`}
                     />
-                    <span className="relative z-10">{label}</span>
+                    <span className="relative z-10 flex-1 text-left">{label}</span>
+                    {id === 'money' && sharedTx.pendingTransactions.length > 0 && (
+                      <span className="relative z-10 font-mono-data tabular-nums text-xs font-bold text-[#14558a] dark:text-[#43b1d4]">
+                        {sharedTx.pendingTransactions.length}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -300,6 +315,14 @@ export default function App() {
         {/* Main Scrollable Content Canvas */}
         <main className="flex-1 lg:pl-64 pb-24 lg:pb-12">
           <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-10 py-6 sm:py-10">
+            <PendingTransactionBanner
+              pendingTransactions={sharedTx.pendingTransactions}
+              onReviewAll={() => setActiveTab('money')}
+              onQuickAction={(tx, mode) => {
+                setPendingClassificationRequest({ tx, mode });
+                setActiveTab('money');
+              }}
+            />
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -321,12 +344,19 @@ export default function App() {
                     itemCount={items.length}
                     completedCount={completedCount}
                     reducedMotion={preferences.reducedMotion}
+                    summary={sharedTx.summary}
+                    pendingCount={sharedTx.pendingTransactions.length}
                   />
                 )}
                 {activeTab === 'android-hub' && (
                   <AndroidHubView
                     onNavigate={setActiveTab}
                     reducedMotion={preferences.reducedMotion}
+                    sharedTx={sharedTx}
+                    onOpenClassifyModal={(tx, mode) => {
+                      setPendingClassificationRequest({ tx, mode });
+                      setActiveTab('money');
+                    }}
                   />
                 )}
                 {activeTab === 'catalog' && (
@@ -389,22 +419,32 @@ export default function App() {
                   </div>
                 )}
                 {activeTab === 'money' && (
-                  <div className="emofah-glass rounded-3xl p-8 space-y-4 text-center">
-                    <DollarSign className="w-12 h-12 mx-auto text-[#14558a] dark:text-[#43b1d4]" />
-                    <h2 className="font-display text-xl font-bold text-[#103c60] dark:text-[#f1f5f9]">
-                      Phase 5 — Financial & M-Pesa Monitoring Module
-                    </h2>
-                    <p className="text-sm text-[#475569] dark:text-[#94a3b8] max-w-md mx-auto">
-                      M-Pesa message parser and transaction classification will be implemented in Phase 5.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('android-hub')}
-                      className="px-4 py-2 rounded-xl bg-[#14558a] dark:bg-[#43b1d4] text-white dark:text-[#060d18] text-xs font-semibold cursor-pointer"
-                    >
-                      Return to Android Hub
-                    </button>
-                  </div>
+                  <TransactionsView
+                    transactions={sharedTx.transactions}
+                    recentSales={sharedTx.recentSales}
+                    history={sharedTx.history}
+                    products={sharedTx.products}
+                    summary={sharedTx.summary}
+                    isLoading={sharedTx.isLoading}
+                    isRefreshing={sharedTx.isRefreshing}
+                    error={sharedTx.error}
+                    warning={sharedTx.warning}
+                    isRealtimeConnected={sharedTx.isRealtimeConnected}
+                    lastUpdatedAt={sharedTx.lastUpdatedAt}
+                    busyEventId={sharedTx.busyEventId}
+                    actionFeedback={sharedTx.actionFeedback}
+                    externalActionRequest={pendingClassificationRequest}
+                    onClearExternalActionRequest={() =>
+                      setPendingClassificationRequest(null)
+                    }
+                    onClearFeedback={sharedTx.clearActionFeedback}
+                    onRefresh={() =>
+                      void sharedTx.refresh({ includeCatalog: true })
+                    }
+                    onClassifyProduct={sharedTx.classifyAsProduct}
+                    onClassifyService={sharedTx.classifyAsService}
+                    onClassifyNonBusiness={sharedTx.classifyAsNonBusiness}
+                  />
                 )}
                 {activeTab === 'orders' && (
                   <div className="emofah-glass rounded-3xl p-8 space-y-4 text-center">
@@ -480,9 +520,9 @@ export default function App() {
           <div className="grid grid-cols-5 h-14 items-center px-1">
             {[
               { id: 'home', label: 'Home', icon: Home },
+              { id: 'money', label: 'Transactions', icon: DollarSign },
               { id: 'android-hub', label: 'Android', icon: Smartphone },
-              { id: 'scan', label: 'Scan', icon: Camera },
-              { id: 'sales', label: 'Sales', icon: ShoppingCart },
+              { id: 'catalog', label: 'Catalogue', icon: Package },
               { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
             ].map(({ id, label, icon: Icon }) => {
               const isActive = activeTab === id;

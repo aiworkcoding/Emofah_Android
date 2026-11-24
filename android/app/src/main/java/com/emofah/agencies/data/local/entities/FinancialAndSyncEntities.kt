@@ -15,6 +15,7 @@ import androidx.room.PrimaryKey
         Index(value = ["transaction_reference"]),
         Index(value = ["sync_status"]),
         Index(value = ["review_status"]),
+        Index(value = ["classification_status"]),
     ],
 )
 data class PendingFinancialEventEntity(
@@ -22,7 +23,7 @@ data class PendingFinancialEventEntity(
     @ColumnInfo(name = "event_id")
     val eventId: String,
     @ColumnInfo(name = "source")
-    val source: String, // MPESA_SMS, MANUAL
+    val source: String, // MPESA_SMS, MPESA_PASTE, MANUAL, ANDROID_SERVICE
     @ColumnInfo(name = "amount")
     val amount: Double,
     @ColumnInfo(name = "currency")
@@ -47,6 +48,34 @@ data class PendingFinancialEventEntity(
     val syncStatus: String = SyncState.LOCAL_PENDING,
     @ColumnInfo(name = "event_timestamp_epoch_ms")
     val eventTimestampEpochMs: Long,
+    @ColumnInfo(name = "classification_status")
+    val classificationStatus: String = "PENDING_CLASSIFICATION",
+    @ColumnInfo(name = "server_event_id")
+    val serverEventId: String? = null,
+    @ColumnInfo(name = "linked_sale_id")
+    val linkedSaleId: Long? = null,
+    @ColumnInfo(name = "linked_client_sale_id")
+    val linkedClientSaleId: String? = null,
+    @ColumnInfo(name = "linked_service_id")
+    val linkedServiceId: String? = null,
+    @ColumnInfo(name = "linked_client_service_id")
+    val linkedClientServiceId: String? = null,
+    @ColumnInfo(name = "linked_product_id")
+    val linkedProductId: Long? = null,
+    @ColumnInfo(name = "linked_product_name")
+    val linkedProductName: String? = null,
+    @ColumnInfo(name = "linked_quantity")
+    val linkedQuantity: Int? = null,
+    @ColumnInfo(name = "classification_note")
+    val classificationNote: String? = null,
+    @ColumnInfo(name = "classified_at_epoch_ms")
+    val classifiedAtEpochMs: Long? = null,
+    @ColumnInfo(name = "classified_by")
+    val classifiedBy: String? = null,
+    @ColumnInfo(name = "classified_device")
+    val classifiedDevice: String? = null,
+    @ColumnInfo(name = "excludes_from_balance")
+    val excludesFromBalance: Boolean = false,
 )
 
 /**

@@ -286,6 +286,11 @@ class ServiceOperationRepository(
             reviewStatus = "PENDING_DESKTOP_RULES",
             syncStatus = syncStatus,
             eventTimestampEpochMs = nowMs,
+            classificationStatus = "BUSINESS_SERVICE",
+            linkedClientServiceId = draft.clientServiceId,
+            linkedProductName = draft.serviceType.label,
+            linkedQuantity = draft.quantityOrDuration,
+            excludesFromBalance = false,
         )
     }
 }

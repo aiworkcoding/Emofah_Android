@@ -1,5 +1,15 @@
-import { ArrowRight, Layers, Palette, SlidersHorizontal } from 'lucide-react';
+import {
+  ArrowRight,
+  Briefcase,
+  Clock,
+  Layers,
+  Package,
+  Palette,
+  Receipt,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { motion } from 'motion/react';
+import { formatKes, type BusinessBalanceSummary } from '../services/financialBalance';
 import type { NavTab } from '../types/app';
 import { BrandMark } from './BrandMark';
 
@@ -8,6 +18,8 @@ interface OverviewViewProps {
   itemCount: number;
   completedCount: number;
   reducedMotion: boolean;
+  summary?: BusinessBalanceSummary;
+  pendingCount?: number;
 }
 
 export function OverviewView({
@@ -15,11 +27,104 @@ export function OverviewView({
   itemCount,
   completedCount,
   reducedMotion,
+  summary,
+  pendingCount = 0,
 }: OverviewViewProps) {
   const tapMotion = reducedMotion ? undefined : { scale: 0.985 };
 
   return (
     <div className="space-y-8">
+      {/* Authoritative Classified Business Balance Card */}
+      {summary && (
+        <section
+          aria-label="Authoritative Store Financial Status"
+          className="emofah-glass rounded-3xl p-6 sm:p-8 space-y-5"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#14558a] dark:text-[#43b1d4]">
+                <Receipt className="w-3.5 h-3.5" />
+                <span>Classified Business Balance · Shared Supabase Ledger</span>
+              </div>
+              <h2 className="mt-1 font-display text-2xl sm:text-3xl font-bold text-[#103c60] dark:text-[#f1f5f9]">
+                {formatKes(summary.businessBalance)}
+              </h2>
+              <p className="text-xs text-[#64748b] dark:text-[#94a3b8] mt-0.5">
+                Excludes pending and personal transfers · Derived only from confirmed business transactions
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onNavigate('money')}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-[#14558a] hover:bg-[#103c60] dark:bg-[#43b1d4] dark:hover:bg-[#348fc2] text-white dark:text-[#060d18] text-xs font-semibold inline-flex items-center gap-2 transition-colors cursor-pointer self-start sm:self-auto"
+            >
+              <span>Open Transactions &amp; Classify</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <div className="p-3.5 rounded-2xl bg-white/70 dark:bg-[#0d1f36]/70 border border-[#103c60]/10 dark:border-[#43b1d4]/15">
+              <div className="flex items-center justify-between text-xs text-[#64748b] dark:text-[#94a3b8]">
+                <span>Product Sales</span>
+                <Package className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div className="font-mono-data tabular-nums text-lg font-bold text-emerald-700 dark:text-emerald-400 mt-1">
+                {formatKes(summary.businessProductNet)}
+              </div>
+              <div className="text-[11px] text-[#64748b] dark:text-[#94a3b8] mt-0.5 font-mono-data tabular-nums">
+                {summary.businessProductCount} sale(s) · Single-counted inventory
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white/70 dark:bg-[#0d1f36]/70 border border-[#103c60]/10 dark:border-[#43b1d4]/15">
+              <div className="flex items-center justify-between text-xs text-[#64748b] dark:text-[#94a3b8]">
+                <span>Service Revenue</span>
+                <Briefcase className="w-3.5 h-3.5 text-[#14558a] dark:text-[#43b1d4]" />
+              </div>
+              <div className="font-mono-data tabular-nums text-lg font-bold text-[#14558a] dark:text-[#43b1d4] mt-1">
+                {formatKes(summary.businessServiceNet)}
+              </div>
+              <div className="text-[11px] text-[#64748b] dark:text-[#94a3b8] mt-0.5 font-mono-data tabular-nums">
+                {summary.businessServiceCount} service operation(s) net
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white/70 dark:bg-[#0d1f36]/70 border border-[#103c60]/10 dark:border-[#43b1d4]/15">
+              <div className="flex items-center justify-between text-xs text-[#64748b] dark:text-[#94a3b8]">
+                <span>Excluded / Pending</span>
+                <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div className="font-mono-data tabular-nums text-lg font-bold text-[#475569] dark:text-[#cbd5e1] mt-1">
+                {formatKes(summary.pendingExcludedAmount + summary.nonBusinessExcludedAmount)}
+              </div>
+              <div className="text-[11px] text-[#64748b] dark:text-[#94a3b8] mt-0.5 font-mono-data tabular-nums">
+                {summary.pendingCount} pending · {summary.nonBusinessCount} non-business
+              </div>
+            </div>
+          </div>
+
+          {pendingCount > 0 && (
+            <div className="p-3 rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50/90 dark:bg-amber-950/30 flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2 text-amber-900 dark:text-amber-200">
+                <Clock className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span>
+                  <strong>{pendingCount} transaction{pendingCount > 1 ? 's' : ''}</strong> captured automatically and awaiting classification (excluded from balance).
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('money')}
+                className="font-semibold text-amber-900 dark:text-amber-300 hover:underline shrink-0 cursor-pointer"
+              >
+                Classify Now →
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="emofah-glass rounded-3xl p-6 sm:p-10">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-8">
           <div className="space-y-4 max-w-xl">
