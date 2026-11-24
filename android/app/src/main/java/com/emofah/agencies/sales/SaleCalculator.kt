@@ -157,6 +157,9 @@ data class PreparedSaleDraft(
 ) {
     val isPriceOverridden: Boolean
         get() = abs(unitSellPrice - originalSellPrice) > PriceOverridePolicy.PRICE_EPSILON
+
+    val effectiveUnitSellPrice: Double
+        get() = unitSellPrice
 }
 
 object SaleCalculator {

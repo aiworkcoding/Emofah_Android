@@ -73,6 +73,7 @@ data class RemoteFinancialTransaction(
     val excludesFromBalance: Boolean,
     val serviceTotalRevenue: Double?,
     val saleTotalPrice: Double?,
+    val serviceLabel: String? = null,
 )
 
 data class BusinessBalanceReport(

@@ -373,6 +373,7 @@ class SupabaseTransactionClassificationClient(
                 excludesFromBalance = excludesFromBalance,
                 serviceTotalRevenue = optDbl("service_total_revenue"),
                 saleTotalPrice = optDbl("sale_total_price"),
+                serviceLabel = optStr("service_label") ?: optStr("linked_service_label"),
             )
         }
     }

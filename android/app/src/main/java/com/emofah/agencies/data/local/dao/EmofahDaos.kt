@@ -536,6 +536,9 @@ interface SyncQueueDao {
     @Query("SELECT * FROM sync_queue_events WHERE event_id = :eventId LIMIT 1")
     suspend fun getEventById(eventId: String): SyncQueueEventEntity?
 
+    @Query("SELECT * FROM sync_queue_events WHERE event_id = :eventId LIMIT 1")
+    suspend fun findEventById(eventId: String): SyncQueueEventEntity?
+
     @Query("SELECT * FROM sync_queue_events ORDER BY created_at_epoch_ms DESC")
     fun observeAllEvents(): Flow<List<SyncQueueEventEntity>>
 
