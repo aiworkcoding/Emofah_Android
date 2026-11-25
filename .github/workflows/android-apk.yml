@@ -305,9 +305,9 @@ jobs:
           echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
 
-          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
-
           set +e
+          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
+          gradle_rc=$?
           python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest"
           verify_rc=$?
           set -e
@@ -316,11 +316,21 @@ jobs:
             if [ "$verify_rc" -eq 1 ]; then
               echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
               echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
-            else
+            elif [ "$gradle_rc" -eq 0 ]; then
               echo "FAILED_STAGE=Stage 9: Test Report Verification" >> "$GITHUB_ENV"
               echo "FAILURE_CATEGORY=TEST_REPORT_VERIFICATION_FAILURE" >> "$GITHUB_ENV"
+            else
+              echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+            fi
+            if [ "$gradle_rc" -ne 0 ]; then
+              exit "$gradle_rc"
             fi
             exit "$verify_rc"
+          fi
+
+          if [ "$gradle_rc" -ne 0 ]; then
+            echo "ERROR: [GRADLE_EXECUTION_FAILURE] Unit test task exited with code $gradle_rc." >&2
+            exit "$gradle_rc"
           fi
 
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
@@ -404,7 +414,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: emofah-android-test-reports
-          path: android/app/build/reports/tests/testDebugUnitTest
+          path: |
+            android/app/build/reports/tests/testDebugUnitTest
+            android/app/build/test-results/testDebugUnitTest
           if-no-files-found: ignore
           retention-days: 14
 
@@ -435,7 +447,7 @@ jobs:
             echo "| 6. SDK Packages (\`build-tools ${ANDROID_BUILD_TOOLS_VERSION:-?}\`) | \`${{ steps.verify_sdk_packages.outcome }}\` |"
             echo "| 7. Dependency Resolution | \`${{ steps.resolve_deps.outcome }}\` |"
             echo "| 8. Android Compilation | \`${{ steps.compile_android.outcome }}\` |"
-            echo "| 9. Unit Tests (\`${UNIT_TEST_CASES:-0}\` cases / \`${UNIT_TEST_SUITES:-0}\` suites) | \`${{ steps.unit_tests.outcome }}\` |"
+            echo "| 9. Unit Tests (\`${UNIT_TEST_CASES:-0}\` cases / \`${UNIT_TEST_SUITES:-0}\` suites, \`${UNIT_TEST_FAILURES:-0}\` failed / \`${UNIT_TEST_ERRORS:-0}\` errors) | \`${{ steps.unit_tests.outcome }}\` |"
             echo "| 10. APK Generation (assembleDebug) | \`${{ steps.assemble_apk.outcome }}\` |"
             echo "| 11. APK Integrity Verification | \`${{ steps.verify_apk.outcome }}\` |"
             echo "| 12. Artifact Upload & Check | \`${{ steps.upload_apk.outcome }}\` / \`${{ steps.verify_upload.outcome }}\` |"

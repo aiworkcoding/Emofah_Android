@@ -314,9 +314,9 @@ jobs:
           echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
 
-          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --console=plain --stacktrace
-
           set +e
+          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest :app:testReleaseUnitTest --no-daemon --console=plain --stacktrace
+          gradle_rc=$?
           python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest" "app/build/test-results/testReleaseUnitTest"
           verify_rc=$?
           set -e
@@ -325,11 +325,21 @@ jobs:
             if [ "$verify_rc" -eq 1 ]; then
               echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
               echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
-            else
+            elif [ "$gradle_rc" -eq 0 ]; then
               echo "FAILED_STAGE=Stage 9: Test Report Verification" >> "$GITHUB_ENV"
               echo "FAILURE_CATEGORY=TEST_REPORT_VERIFICATION_FAILURE" >> "$GITHUB_ENV"
+            else
+              echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+            fi
+            if [ "$gradle_rc" -ne 0 ]; then
+              exit "$gradle_rc"
             fi
             exit "$verify_rc"
+          fi
+
+          if [ "$gradle_rc" -ne 0 ]; then
+            echo "ERROR: [GRADLE_EXECUTION_FAILURE] Unit test task exited with code $gradle_rc." >&2
+            exit "$gradle_rc"
           fi
 
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
@@ -461,6 +471,8 @@ jobs:
           path: |
             android/app/build/reports/tests/testDebugUnitTest
             android/app/build/reports/tests/testReleaseUnitTest
+            android/app/build/test-results/testDebugUnitTest
+            android/app/build/test-results/testReleaseUnitTest
           if-no-files-found: ignore
           retention-days: 14
 
@@ -480,6 +492,7 @@ jobs:
             echo ""
             echo "- **Overall Status:** \`${{ job.status }}\`"
             echo "- **Ref:** \`${{ github.ref }}\` (\`${{ github.sha }}\`)"
+            echo "- **Unit Tests:** \`${UNIT_TEST_CASES:-0}\` cases / \`${UNIT_TEST_SUITES:-0}\` suites (\`${UNIT_TEST_FAILURES:-0}\` failed, \`${UNIT_TEST_ERRORS:-0}\` errors)"
             if [ "${{ job.status }}" != "success" ]; then
               echo "- **Failed Stage:** \`${FAILED_STAGE:-Unknown (inspect step logs)}\`"
               echo "- **Diagnostic Category:** \`${FAILURE_CATEGORY:-UNCLASSIFIED_FAILURE}\`"

@@ -185,12 +185,9 @@ object ReceiptLayoutParser {
             val (rawName, qty, unitCost, lineTotal) = parsed
             if (rawName.length < 2 || (lineTotal <= 0.0 && unitCost <= 0.0)) continue
 
-            val category = ReceiptOcrParser.inferCategoryHint(rawName)
-            val matchedProduct = if (category == PurchaseItemCategory.RESALE_PRODUCT) {
-                findConservativeCatalogMatch(rawName, activeProducts)
-            } else {
-                null
-            }
+            val categoryHint = ReceiptOcrParser.inferCategoryHint(rawName)
+            val matchedProduct = findConservativeCatalogMatch(rawName, activeProducts, categoryHint)
+            val category = if (matchedProduct != null) PurchaseItemCategory.RESALE_PRODUCT else categoryHint
 
             val note = when {
                 matchedProduct != null -> "Matched locally via OCR — verify qty & cost"
@@ -351,33 +348,53 @@ object ReceiptLayoutParser {
     }
 
     /**
-     * Conservative matcher: returns a product ONLY if token overlap >= 0.50 AND
-     * either there is no close runner-up or variant tokens distinguish the winner.
-     * Uncertain/ambiguous OCR names return null so staff confirms manually.
+     * Conservative matcher: returns a product ONLY if token overlap and coverage thresholds are met,
+     * protecting against false-positive catalogue matches on unrelated items.
      */
     internal fun findConservativeCatalogMatch(
         rawName: String,
         catalogue: List<ProductIdentity>,
+        categoryHint: PurchaseItemCategory = ReceiptOcrParser.inferCategoryHint(rawName),
     ): ProductIdentity? {
-        val tokens = rawName.lowercase()
-            .replace(Regex("""[^a-z0-9\s]"""), " ")
-            .split(Regex("""\s+"""))
-            .map { it.trim() }
-            .filter { it.length >= 2 }
+        val cleanRaw = rawName.lowercase().replace(Regex("""[^a-z0-9\s]"""), " ")
+        val tokens = cleanRaw.split(Regex("""\s+""")).map { it.trim() }.filter { it.length >= 2 }.distinct()
         if (tokens.isEmpty()) return null
 
         val scored = mutableListOf<Pair<ProductIdentity, Double>>()
         for (prod in catalogue) {
-            val hay = "${prod.name} ${prod.baseName} ${prod.variantLabel.orEmpty()} ${prod.brandHint.orEmpty()} ${prod.sku.orEmpty()} ${prod.barcode.orEmpty()}"
-                .lowercase()
-            val hits = tokens.count { hay.contains(it) }
-            if (hits == 0) continue
-            val coverage = hits.toDouble() / tokens.size.toDouble()
-            // Exact or numeric-variant match bonus
-            val variantTokens = prod.variantLabel?.lowercase()?.split(Regex("""\s+"""))?.filter { it.length >= 2 }.orEmpty()
-            val variantHit = variantTokens.isNotEmpty() && variantTokens.all { rawName.lowercase().contains(it) }
-            val score = coverage + if (variantHit) 0.15 else 0.0
-            if (coverage >= 0.50) {
+            val prodNameLower = prod.name.lowercase()
+            val prodTokens = prodNameLower.replace(Regex("""[^a-z0-9\s]"""), " ")
+                .split(Regex("""\s+""")).map { it.trim() }.filter { it.length >= 2 }.distinct()
+            if (prodTokens.isEmpty()) continue
+
+            // Exact SKU or barcode match
+            val exactSkuMatch = !prod.sku.isNullOrBlank() && cleanRaw.contains(prod.sku!!.lowercase().trim()) && prod.sku!!.length >= 3
+            val exactBarcodeMatch = !prod.barcode.isNullOrBlank() && cleanRaw.contains(prod.barcode!!.lowercase().trim()) && prod.barcode!!.length >= 4
+
+            val hitCount = tokens.count { t ->
+                prodTokens.any { pt ->
+                    pt == t || (pt.length >= 3 && (t == "${pt}s" || t == "${pt}es" || pt == "${subPlural(pt)}")) ||
+                        (t.length >= 3 && (pt == "${t}s" || pt == "${t}es"))
+                }
+            }
+            if (hitCount == 0 && !exactSkuMatch && !exactBarcodeMatch) continue
+
+            val queryCoverage = hitCount.toDouble() / tokens.size.toDouble()
+            val prodCoverage = hitCount.toDouble() / prodTokens.size.toDouble()
+
+            if (hitCount < 2 && prodTokens.size > 1 && !exactSkuMatch && !exactBarcodeMatch) {
+                continue
+            }
+
+            val prodCategoryHint = ReceiptOcrParser.inferCategoryHint(prod.name)
+            val minQueryCov = if (categoryHint == PurchaseItemCategory.RESALE_PRODUCT) 0.50 else if (prodCategoryHint == categoryHint) 0.60 else 0.85
+            val minProdCov = if (categoryHint == PurchaseItemCategory.RESALE_PRODUCT) 0.40 else if (prodCategoryHint == categoryHint) 0.45 else 0.70
+
+            if ((queryCoverage >= minQueryCov && prodCoverage >= minProdCov) || exactSkuMatch || exactBarcodeMatch) {
+                val variantTokens = prod.variantLabel?.lowercase()?.replace(Regex("""[^a-z0-9\s]"""), " ")
+                    ?.split(Regex("""\s+"""))?.filter { it.length >= 2 }.orEmpty()
+                val variantHit = variantTokens.isNotEmpty() && variantTokens.all { cleanRaw.contains(it) }
+                val score = (queryCoverage + prodCoverage) / 2.0 + if (variantHit) 0.15 else 0.0 + if (exactSkuMatch || exactBarcodeMatch) 0.30 else 0.0
                 scored += prod to score
             }
         }
@@ -390,6 +407,8 @@ object ReceiptLayoutParser {
         }
         return top.first
     }
+
+    private fun subPlural(s: String): String = if (s.endsWith("s")) s else "${s}s"
 
     private fun String.toCleanAmount(): Double? =
         replace(",", "").toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 }

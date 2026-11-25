@@ -15,7 +15,7 @@ import glob
 import os
 import sys
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Set, Tuple
 
 
@@ -23,6 +23,16 @@ EXIT_OK = 0
 EXIT_TEST_FAILURE = 1
 EXIT_MISSING_OR_EMPTY = 2
 EXIT_MALFORMED_XML = 3
+MAX_STACK_LINES = 40
+
+
+@dataclass
+class FailedCaseDetail:
+    full_name: str
+    kind: str
+    exc_type: str
+    message: str
+    stacktrace: str
 
 
 @dataclass
@@ -34,6 +44,7 @@ class SuiteStats:
     errors: int
     skipped: int
     failed_cases: List[str]
+    failed_details: List[FailedCaseDetail] = field(default_factory=list)
 
 
 def _parse_non_negative_int(elem: ET.Element, attr: str, file_path: str, required: bool = False) -> int:
@@ -76,11 +87,27 @@ def _extract_suites_from_xml(file_path: str) -> List[SuiteStats]:
         skipped = _parse_non_negative_int(suite_el, "skipped", file_path, required=False)
 
         failed_cases: List[str] = []
+        failed_details: List[FailedCaseDetail] = []
         for tc in suite_el.findall("testcase"):
             tc_class = (tc.attrib.get("classname") or suite_name).strip()
             tc_name = (tc.attrib.get("name") or "<unnamed>").strip()
-            if tc.find("failure") is not None or tc.find("error") is not None:
-                failed_cases.append(f"{tc_class}#{tc_name}")
+            full_name = f"{tc_class}#{tc_name}"
+            issue_nodes = [(kind, el) for kind in ("failure", "error") for el in tc.findall(kind)]
+            if issue_nodes:
+                failed_cases.append(full_name)
+                for kind, el in issue_nodes:
+                    exc_type = (el.attrib.get("type") or kind).strip()
+                    message = (el.attrib.get("message") or "").strip()
+                    stacktrace = (el.text or "").strip()
+                    failed_details.append(
+                        FailedCaseDetail(
+                            full_name=full_name,
+                            kind=kind,
+                            exc_type=exc_type,
+                            message=message,
+                            stacktrace=stacktrace,
+                        )
+                    )
 
         parsed.append(
             SuiteStats(
@@ -91,15 +118,26 @@ def _extract_suites_from_xml(file_path: str) -> List[SuiteStats]:
                 errors=errors,
                 skipped=skipped,
                 failed_cases=failed_cases,
+                failed_details=failed_details,
             )
         )
     return parsed
+
+
+def _truncate_stack_lines(stacktrace: str) -> List[str]:
+    if not stacktrace:
+        return []
+    lines = [line.rstrip() for line in stacktrace.splitlines() if line.strip()]
+    if len(lines) <= MAX_STACK_LINES:
+        return lines
+    return lines[:MAX_STACK_LINES] + [f"... ({len(lines) - MAX_STACK_LINES} more stack trace line(s) truncated)"]
 
 
 def verify_directories(
     directories: List[str],
     github_env_path: str | None = None,
     github_output_path: str | None = None,
+    github_summary_path: str | None = None,
 ) -> int:
     if not directories:
         print("ERROR: [TEST_REPORT_ERROR] At least one test results directory must be provided.", file=sys.stderr)
@@ -151,6 +189,7 @@ def verify_directories(
     total_failures = sum(s.failures for s in all_suites)
     total_errors = sum(s.errors for s in all_suites)
     total_skipped = sum(s.skipped for s in all_suites)
+    failed_case_details = [detail for s in all_suites for detail in s.failed_details]
     failed_case_names = [case for s in all_suites for case in s.failed_cases]
 
     if total_suites == 0 or total_tests == 0:
@@ -187,10 +226,36 @@ def verify_directories(
             f"failures={total_failures}, errors={total_errors}, tests={total_tests}, suites={total_suites}.",
             file=sys.stderr,
         )
-        if failed_case_names:
+        if failed_case_details:
+            print("Failing test cases:", file=sys.stderr)
+            for detail in failed_case_details[:50]:
+                header = f"  - {detail.full_name} [{detail.exc_type}]"
+                if detail.message:
+                    header = f"{header}: {detail.message}"
+                print(header, file=sys.stderr)
+                for st_line in _truncate_stack_lines(detail.stacktrace):
+                    print(f"      {st_line}", file=sys.stderr)
+        elif failed_case_names:
             print("Failing test cases:", file=sys.stderr)
             for case in failed_case_names[:50]:
                 print(f"  - {case}", file=sys.stderr)
+
+        if github_summary_path:
+            with open(github_summary_path, "a", encoding="utf-8") as summary_file:
+                summary_file.write("### Unit Test Failure Diagnostics\n\n")
+                summary_file.write(
+                    f"- **Tests Executed:** `{total_tests}` across `{total_suites}` suite(s) "
+                    f"(`failures={total_failures}`, `errors={total_errors}`, `skipped={total_skipped}`)\n\n"
+                )
+                for detail in failed_case_details[:20]:
+                    summary_file.write(f"#### `{detail.full_name}`\n")
+                    if detail.exc_type or detail.message:
+                        summary_file.write(f"- **Error:** `{detail.exc_type}` — {detail.message or '(no message)'}\n")
+                    stack_lines = _truncate_stack_lines(detail.stacktrace)
+                    if stack_lines:
+                        summary_file.write("\n```text\n")
+                        summary_file.write("\n".join(stack_lines))
+                        summary_file.write("\n```\n\n")
         return EXIT_TEST_FAILURE
 
     print(
@@ -205,11 +270,13 @@ def main() -> int:
     parser.add_argument("directories", nargs="+", help="One or more Gradle test-results XML directories.")
     parser.add_argument("--github-env", default=os.environ.get("GITHUB_ENV") or None)
     parser.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT") or None)
+    parser.add_argument("--github-summary", default=os.environ.get("GITHUB_STEP_SUMMARY") or None)
     args = parser.parse_args()
     return verify_directories(
         directories=args.directories,
         github_env_path=args.github_env,
         github_output_path=args.github_output,
+        github_summary_path=args.github_summary,
     )
 
 

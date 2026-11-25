@@ -16,7 +16,7 @@ GRADLE_CMD="${GRADLE_WRAPPER_CMD:-./gradlew}"
 is_deterministic_failure() {
   local log_file="$1"
   grep -qiE \
-    "Multiple arguments were provided for command-line option|not found in configuration container|Problem configuring task|Task '.*' not found|Could not find method|Could not compile build file|Compilation error|Unresolved reference|No parameter with name|Project '.*' not found|Unsupported class file major version|There were failing tests|Execution failed for task '.*:(compile|ksp|test|process|merge|package|bundle|assemble)|> Task .*:(compile|ksp|test|process|merge|package|bundle|assemble).* FAILED|Received status code 40[0134]|status code: 40[0134]" \
+    "Multiple arguments were provided for command-line option|not found in configuration container|Problem configuring task|Task '.*' not found|Could not find method|Could not compile build file|Compilation error|Unresolved reference|No parameter with name|Project '.*' not found|Unsupported class file major version|There were failing tests|AssertionError|ComparisonFailure|Execution failed for task '.*:(compile|ksp|test|process|merge|package|bundle|assemble)|> Task .*:(compile|ksp|test|process|merge|package|bundle|assemble).* FAILED|Received status code 40[0134]|status code: 40[0134]" \
     "$log_file"
 }
 
@@ -33,7 +33,7 @@ classify_failure() {
     echo "GRADLE_CONFIGURATION_FAILURE"
   elif grep -qiE "> Task .*:(compile|ksp)[^ ]* FAILED|Execution failed for task '.*:(compile|ksp)|Compilation error|Unresolved reference|No parameter with name" "$log_file"; then
     echo "PROJECT_COMPILATION_FAILURE"
-  elif grep -qiE "> Task .*:test[^ ]* FAILED|Execution failed for task '.*:test|There were failing tests|AssertionError" "$log_file"; then
+  elif grep -qiE "> Task .*:test[^ ]* FAILED|Execution failed for task '.*:test|There were failing tests|AssertionError|ComparisonFailure" "$log_file"; then
     echo "UNIT_TEST_FAILURE"
   elif grep -qiE "RELEASE_SIGNING_FAILURE|keystore|signingConfig" "$log_file"; then
     echo "RELEASE_SIGNING_FAILURE"

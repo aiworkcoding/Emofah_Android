@@ -171,4 +171,41 @@ class ReceiptParserAndValidatorStageTest {
         assertEquals(500.0, draft.subtotalAmount, 0.001)
         assertEquals(999.0, draft.extractedTotal, 0.001)
     }
+
+    @Test
+    fun parseRawText_matchesCatalogResaleDespiteConsumableKeyword() {
+        val rawText = """
+            WHOLESALE STATIONERS
+            Invoice: INV-991
+            A4 Printing Paper Ream 80gsm 2 650.00 1300.00
+            Total: Ksh 1300.00
+        """.trimIndent()
+
+        val draft = ReceiptLayoutParser.parseRawText(
+            rawOcrText = rawText,
+            catalogueProducts = sampleCatalogue(),
+        )
+
+        assertEquals(1, draft.lines.size)
+        assertEquals(501L, draft.lines[0].matchedProductId)
+        assertEquals(PurchaseItemCategory.RESALE_PRODUCT, draft.lines[0].itemCategory)
+    }
+
+    @Test
+    fun parseRawText_rejectsFalsePositiveOnUnrelatedConsumables() {
+        val rawText = """
+            RANDOM SUPPLIERS
+            Invoice: INV-992
+            2 Ream A4 Unmatched Printing Paper 1 1200.00 1200.00
+            Total: Ksh 1200.00
+        """.trimIndent()
+
+        val draft = ReceiptLayoutParser.parseRawText(
+            rawOcrText = rawText,
+            catalogueProducts = sampleCatalogue(),
+        )
+
+        assertEquals(1, draft.lines.size)
+        assertNull(draft.lines[0].matchedProductId)
+    }
 }

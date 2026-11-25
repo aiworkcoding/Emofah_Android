@@ -123,6 +123,18 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests.all { test ->
+            test.testLogging {
+                events("FAILED", "SKIPPED", "STANDARD_ERROR")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showExceptions = true
+                showCauses = true
+                showStackTraces = true
+            }
+        }
+    }
 }
 
 ksp {
