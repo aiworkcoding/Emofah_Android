@@ -128,6 +128,7 @@ class SharedTransactionClassificationTest {
             sale = LocalSaleEntity(
                 clientSaleId = "sale-1",
                 serverSaleId = 10L,
+                idempotencyKey = "idem-sale-1",
                 totalAmount = 1200.0,
                 paymentMethod = "MPESA",
                 saleDateIso = "2026-11-23T09:00:00Z",
