@@ -292,47 +292,145 @@ jobs:
       # =========================================================================
       # STAGE 9: Project Verification (Unit Tests)
       # =========================================================================
-      - name: "Stage 9: Run unit tests & verify JUnit XML reports"
-        id: unit_tests
+      - name: "Stage 9a: Execute unit tests (Gradle testDebugUnitTest)"
+        id: test_exec
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           CLOUD_RECOGNITION_URL: ${{ vars.CLOUD_RECOGNITION_URL }}
           COMPILATION_STAGE_LABEL: "Stage 9: Unit Test Compilation"
           UNIT_TEST_STAGE_LABEL: "Stage 9: Project Verification (Unit Tests)"
+          CURRENT_STAGE_LABEL: "Stage 9: Project Verification (Unit Tests)"
         run: |
           set -euo pipefail
           echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
 
+          # Controlled exit-code capture: run testDebugUnitTest with --continue to ensure all tests run, capturing exit code without aborting before diagnostics and report archival
           set +e
-          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest --no-daemon --console=plain --stacktrace
+          ../.github/scripts/gradle-with-retry.sh :app:testDebugUnitTest --continue --no-daemon --console=plain --stacktrace
           gradle_rc=$?
+          set -e
+
+          echo "GRADLE_TEST_RC=$gradle_rc" >> "$GITHUB_ENV"
+          echo "$gradle_rc" > "$RUNNER_TEMP/emofah_gradle_test_rc"
+          echo "Phase 9a: Gradle testDebugUnitTest completed with exit code $gradle_rc (controlled capture)."
+
+      - name: "Stage 9b: Archive unit test reports & HTML diagnostics"
+        id: archive_test_reports
+        if: always() && steps.compile_android.conclusion == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: emofah-android-test-reports
+          path: |
+            android/app/build/reports/tests/testDebugUnitTest
+            android/app/build/test-results/testDebugUnitTest
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+
+      - name: "Stage 9c: Analyze test reports & extract diagnostics"
+        id: analyze_test_reports
+        if: always() && steps.compile_android.conclusion == 'success'
+        run: |
+          set -euo pipefail
+          set +e
           python3 ../.github/scripts/verify-test-results.py "app/build/test-results/testDebugUnitTest"
           verify_rc=$?
           set -e
 
-          if [ "$verify_rc" -ne 0 ]; then
-            if [ "$verify_rc" -eq 1 ]; then
-              echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
-              echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
-            elif [ "$gradle_rc" -eq 0 ]; then
+          echo "VERIFY_RC=$verify_rc" >> "$GITHUB_ENV"
+          echo "$verify_rc" > "$RUNNER_TEMP/emofah_verify_rc"
+          echo "Phase 9c: Test report verification completed with code $verify_rc."
+
+      - name: "Stage 9d: Evaluate unit test execution status & enforce quality gate"
+        id: unit_tests
+        if: always() && steps.compile_android.conclusion == 'success'
+        run: |
+          set -euo pipefail
+
+          if [ -f "$RUNNER_TEMP/emofah_gradle_test_rc" ]; then
+            GRADLE_TEST_RC=$(cat "$RUNNER_TEMP/emofah_gradle_test_rc")
+          else
+            GRADLE_TEST_RC="${GRADLE_TEST_RC:-}"
+          fi
+
+          if [ -f "$RUNNER_TEMP/emofah_verify_rc" ]; then
+            VERIFY_RC=$(cat "$RUNNER_TEMP/emofah_verify_rc")
+          else
+            VERIFY_RC="${VERIFY_RC:-}"
+          fi
+
+          echo "Phase 9d: Quality Gate Input: GRADLE_TEST_RC=${GRADLE_TEST_RC:-<unset>}, VERIFY_RC=${VERIFY_RC:-<unset>}"
+
+          # 1. Guard against incomplete execution where test step crashed before writing status
+          if [ -z "$GRADLE_TEST_RC" ]; then
+            echo "FAILED_STAGE=Stage 9: Unit Test Execution" >> "$GITHUB_ENV"
+            echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [GRADLE_EXECUTION_FAILURE] Gradle test execution did not complete or was killed." >&2
+            exit 1
+          fi
+
+          if [ -z "$VERIFY_RC" ]; then
+            echo "FAILED_STAGE=Stage 9: Diagnostic Analysis" >> "$GITHUB_ENV"
+            echo "FAILURE_CATEGORY=DIAGNOSTIC_PROCESSING_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [DIAGNOSTIC_PROCESSING_FAILURE] Diagnostic analysis script did not complete." >&2
+            exit 1
+          fi
+
+          # 2. Genuine unit test failure (one or more test assertions failed or errored)
+          if [ "$VERIFY_RC" -eq 1 ]; then
+            echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+            echo "FAILURE_CATEGORY=UNIT_TEST_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [UNIT_TEST_FAILURE] Unit test quality gate failed (${UNIT_TEST_FAILURES:-1} failure(s), ${UNIT_TEST_ERRORS:-0} error(s) out of ${UNIT_TEST_CASES:-?} tests across ${UNIT_TEST_SUITES:-?} suites)." >&2
+            if [ "$GRADLE_TEST_RC" -ne 0 ]; then
+              exit "$GRADLE_TEST_RC"
+            fi
+            exit 1
+          fi
+
+          # 3. Missing or empty test reports
+          if [ "$VERIFY_RC" -eq 2 ]; then
+            if [ "$GRADLE_TEST_RC" -ne 0 ]; then
+              echo "FAILED_STAGE=Stage 9: Unit Test Execution" >> "$GITHUB_ENV"
+              if [ -z "${FAILURE_CATEGORY:-}" ] || [ "${FAILURE_CATEGORY:-}" = "GRADLE_EXECUTION_FAILURE" ]; then
+                echo "FAILURE_CATEGORY=GRADLE_EXECUTION_FAILURE" >> "$GITHUB_ENV"
+              fi
+              echo "ERROR: [GRADLE_EXECUTION_FAILURE] Gradle failed during test task with exit code $GRADLE_TEST_RC before test reports were generated." >&2
+              exit "$GRADLE_TEST_RC"
+            else
               echo "FAILED_STAGE=Stage 9: Test Report Verification" >> "$GITHUB_ENV"
               echo "FAILURE_CATEGORY=TEST_REPORT_VERIFICATION_FAILURE" >> "$GITHUB_ENV"
-            else
-              echo "FAILED_STAGE=Stage 9: Project Verification (Unit Tests)" >> "$GITHUB_ENV"
+              echo "ERROR: [TEST_REPORT_VERIFICATION_FAILURE] Zero test reports found despite Gradle returning exit code 0." >&2
+              exit 2
             fi
-            if [ "$gradle_rc" -ne 0 ]; then
-              exit "$gradle_rc"
-            fi
-            exit "$verify_rc"
           fi
 
-          if [ "$gradle_rc" -ne 0 ]; then
-            echo "ERROR: [GRADLE_EXECUTION_FAILURE] Unit test task exited with code $gradle_rc." >&2
-            exit "$gradle_rc"
+          # 4. Malformed XML reports
+          if [ "$VERIFY_RC" -eq 3 ]; then
+            echo "FAILED_STAGE=Stage 9: Test Report Verification" >> "$GITHUB_ENV"
+            echo "FAILURE_CATEGORY=TEST_REPORT_PARSE_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [TEST_REPORT_PARSE_FAILURE] Malformed or unparseable JUnit XML test reports." >&2
+            exit 3
           fi
 
+          # 5. Diagnostic script crashed
+          if [ "$VERIFY_RC" -gt 3 ]; then
+            echo "FAILED_STAGE=Stage 9: Diagnostic Analysis" >> "$GITHUB_ENV"
+            echo "FAILURE_CATEGORY=DIAGNOSTIC_PROCESSING_FAILURE" >> "$GITHUB_ENV"
+            echo "ERROR: [DIAGNOSTIC_PROCESSING_FAILURE] verify-test-results.py exited unexpectedly with code $VERIFY_RC." >&2
+            exit "$VERIFY_RC"
+          fi
+
+          # 6. Gradle reported failure even though verify_rc was 0 (inconsistent build state)
+          if [ "$GRADLE_TEST_RC" -ne 0 ]; then
+            echo "FAILED_STAGE=Stage 9: Unit Test Execution" >> "$GITHUB_ENV"
+            echo "ERROR: [GRADLE_EXECUTION_FAILURE] Gradle test task failed with exit code $GRADLE_TEST_RC." >&2
+            exit "$GRADLE_TEST_RC"
+          fi
+
+          # 7. Clean pass: all tests executed, reports verified, zero failures
+          echo "SUCCESS: Quality gate passed. Executed ${UNIT_TEST_CASES:-0} unit tests across ${UNIT_TEST_SUITES:-0} suites with 0 failures (${UNIT_TEST_PASSED:-0} passed, ${UNIT_TEST_SKIPPED:-0} skipped)."
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
@@ -379,7 +477,7 @@ jobs:
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
 
       # =========================================================================
-      # STAGE 12: Artifact Upload (+ Test Diagnostics on Failure)
+      # STAGE 12: Artifact Upload
       # =========================================================================
       - name: "Stage 12a: Upload verified Debug APK artifact"
         id: upload_apk
@@ -407,18 +505,6 @@ jobs:
 
           echo "FAILED_STAGE=" >> "$GITHUB_ENV"
           echo "FAILURE_CATEGORY=" >> "$GITHUB_ENV"
-
-      - name: "Stage 12c: Upload unit test report on failure"
-        id: upload_test_reports
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: emofah-android-test-reports
-          path: |
-            android/app/build/reports/tests/testDebugUnitTest
-            android/app/build/test-results/testDebugUnitTest
-          if-no-files-found: ignore
-          retention-days: 14
 
       # =========================================================================
       # STAGE 13: Build Summary

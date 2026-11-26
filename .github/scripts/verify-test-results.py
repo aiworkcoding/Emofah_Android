@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -33,6 +34,8 @@ class FailedCaseDetail:
     exc_type: str
     message: str
     stacktrace: str
+    expected: str | None = None
+    actual: str | None = None
 
 
 @dataclass
@@ -99,6 +102,7 @@ def _extract_suites_from_xml(file_path: str) -> List[SuiteStats]:
                     exc_type = (el.attrib.get("type") or kind).strip()
                     message = (el.attrib.get("message") or "").strip()
                     stacktrace = (el.text or "").strip()
+                    exp, act = _extract_expected_actual(message, stacktrace)
                     failed_details.append(
                         FailedCaseDetail(
                             full_name=full_name,
@@ -106,6 +110,8 @@ def _extract_suites_from_xml(file_path: str) -> List[SuiteStats]:
                             exc_type=exc_type,
                             message=message,
                             stacktrace=stacktrace,
+                            expected=exp,
+                            actual=act,
                         )
                     )
 
@@ -122,6 +128,28 @@ def _extract_suites_from_xml(file_path: str) -> List[SuiteStats]:
             )
         )
     return parsed
+
+
+def _extract_expected_actual(message: str, stacktrace: str) -> Tuple[str | None, str | None]:
+    candidates = [message]
+    if stacktrace:
+        candidates.extend(stacktrace.splitlines()[:8])
+    for text in candidates:
+        if not text:
+            continue
+        m = re.search(r"expected:\s*<([^>]*)>\s*but\s*was:\s*<([^>]*)>", text, re.I)
+        if m:
+            return m.group(1), m.group(2)
+        m = re.search(r"expected:\s*\[([^\]]*)\]\s*but\s*was:\s*\[([^\]]*)\]", text, re.I)
+        if m:
+            return m.group(1), m.group(2)
+        m = re.search(r'expected:\s*"([^"]*)"\s*but\s*was:\s*"([^"]*)"', text, re.I)
+        if m:
+            return m.group(1), m.group(2)
+        m = re.search(r"expected\s+same:\s*<([^>]*)>\s*was\s+not:\s*<([^>]*)>", text, re.I)
+        if m:
+            return m.group(1), m.group(2)
+    return None, None
 
 
 def _truncate_stack_lines(stacktrace: str) -> List[str]:
@@ -146,6 +174,9 @@ def verify_directories(
     seen_dirs: Set[str] = set()
     seen_suite_keys: Set[Tuple[str, str]] = set()
     all_suites: List[SuiteStats] = []
+    missing_dirs: List[str] = []
+    empty_dirs: List[str] = []
+    malformed_files: List[Tuple[str, str]] = []
 
     for raw_dir in directories:
         real_dir = os.path.realpath(raw_dir)
@@ -154,24 +185,21 @@ def verify_directories(
             continue
         seen_dirs.add(real_dir)
 
-        if not os.path.exists(raw_dir):
-            print(f"ERROR: [TEST_REPORT_ERROR] Test results directory does not exist: {raw_dir}", file=sys.stderr)
-            return EXIT_MISSING_OR_EMPTY
-        if not os.path.isdir(raw_dir):
-            print(f"ERROR: [TEST_REPORT_ERROR] Test results path is not a directory: {raw_dir}", file=sys.stderr)
-            return EXIT_MISSING_OR_EMPTY
+        if not os.path.exists(raw_dir) or not os.path.isdir(raw_dir):
+            missing_dirs.append(raw_dir)
+            continue
 
         xml_files = sorted(glob.glob(os.path.join(raw_dir, "TEST-*.xml")))
         if not xml_files:
-            print(f"ERROR: [TEST_REPORT_ERROR] No Gradle JUnit XML reports (TEST-*.xml) found in: {raw_dir}", file=sys.stderr)
-            return EXIT_MISSING_OR_EMPTY
+            empty_dirs.append(raw_dir)
+            continue
 
         for xml_file in xml_files:
             try:
                 suites = _extract_suites_from_xml(xml_file)
             except ValueError as exc:
-                print(f"ERROR: [TEST_REPORT_PARSE_FAILURE] {exc}", file=sys.stderr)
-                return EXIT_MALFORMED_XML
+                malformed_files.append((xml_file, str(exc)))
+                continue
 
             for st in suites:
                 suite_key = (real_dir, st.suite_name)
@@ -189,20 +217,15 @@ def verify_directories(
     total_failures = sum(s.failures for s in all_suites)
     total_errors = sum(s.errors for s in all_suites)
     total_skipped = sum(s.skipped for s in all_suites)
+    total_passed = max(0, total_tests - total_failures - total_errors - total_skipped)
     failed_case_details = [detail for s in all_suites for detail in s.failed_details]
     failed_case_names = [case for s in all_suites for case in s.failed_cases]
-
-    if total_suites == 0 or total_tests == 0:
-        print(
-            f"ERROR: [TEST_REPORT_ERROR] Zero unit tests recorded across {total_suites} suite(s).",
-            file=sys.stderr,
-        )
-        return EXIT_MISSING_OR_EMPTY
 
     if github_env_path:
         with open(github_env_path, "a", encoding="utf-8") as env_file:
             env_file.write(f"UNIT_TEST_SUITES={total_suites}\n")
             env_file.write(f"UNIT_TEST_CASES={total_tests}\n")
+            env_file.write(f"UNIT_TEST_PASSED={total_passed}\n")
             env_file.write(f"UNIT_TEST_FAILURES={total_failures}\n")
             env_file.write(f"UNIT_TEST_ERRORS={total_errors}\n")
             env_file.write(f"UNIT_TEST_SKIPPED={total_skipped}\n")
@@ -211,15 +234,18 @@ def verify_directories(
         with open(github_output_path, "a", encoding="utf-8") as out_file:
             out_file.write(f"unit_test_suites={total_suites}\n")
             out_file.write(f"unit_test_cases={total_tests}\n")
+            out_file.write(f"unit_test_passed={total_passed}\n")
             out_file.write(f"unit_test_failures={total_failures}\n")
             out_file.write(f"unit_test_errors={total_errors}\n")
             out_file.write(f"unit_test_skipped={total_skipped}\n")
 
     print(
-        f"UNIT_TEST_SUITES={total_suites} UNIT_TEST_CASES={total_tests} "
+        f"UNIT_TEST_SUITES={total_suites} UNIT_TEST_CASES={total_tests} UNIT_TEST_PASSED={total_passed} "
         f"UNIT_TEST_FAILURES={total_failures} UNIT_TEST_ERRORS={total_errors} UNIT_TEST_SKIPPED={total_skipped}"
     )
 
+    # 1. Genuine test failures must ALWAYS be reported and result in EXIT_TEST_FAILURE (1).
+    #    A missing or malformed secondary directory must never conceal actual failing tests.
     if total_failures > 0 or total_errors > 0:
         print(
             f"ERROR: [UNIT_TEST_FAILURE] Unit test verification failed: "
@@ -233,6 +259,9 @@ def verify_directories(
                 if detail.message:
                     header = f"{header}: {detail.message}"
                 print(header, file=sys.stderr)
+                if detail.expected is not None or detail.actual is not None:
+                    print(f"      Expected: <{detail.expected}>", file=sys.stderr)
+                    print(f"      Actual:   <{detail.actual}>", file=sys.stderr)
                 for st_line in _truncate_stack_lines(detail.stacktrace):
                     print(f"      {st_line}", file=sys.stderr)
         elif failed_case_names:
@@ -245,22 +274,57 @@ def verify_directories(
                 summary_file.write("### Unit Test Failure Diagnostics\n\n")
                 summary_file.write(
                     f"- **Tests Executed:** `{total_tests}` across `{total_suites}` suite(s) "
-                    f"(`failures={total_failures}`, `errors={total_errors}`, `skipped={total_skipped}`)\n\n"
+                    f"(`passed={total_passed}`, `failures={total_failures}`, `errors={total_errors}`, `skipped={total_skipped}`)\n\n"
                 )
                 for detail in failed_case_details[:20]:
                     summary_file.write(f"#### `{detail.full_name}`\n")
                     if detail.exc_type or detail.message:
                         summary_file.write(f"- **Error:** `{detail.exc_type}` — {detail.message or '(no message)'}\n")
+                    if detail.expected is not None or detail.actual is not None:
+                        summary_file.write(f"- **Expected:** `{detail.expected}`\n")
+                        summary_file.write(f"- **Actual:** `{detail.actual}`\n")
                     stack_lines = _truncate_stack_lines(detail.stacktrace)
                     if stack_lines:
                         summary_file.write("\n```text\n")
                         summary_file.write("\n".join(stack_lines))
                         summary_file.write("\n```\n\n")
+
+        if missing_dirs:
+            for md in missing_dirs:
+                print(f"WARNING: Test results directory was also missing or unreadable: {md}", file=sys.stderr)
+        if malformed_files:
+            for mf, exc in malformed_files:
+                print(f"WARNING: Malformed XML file also encountered: {mf} ({exc})", file=sys.stderr)
+
         return EXIT_TEST_FAILURE
+
+    # 2. Check for malformed XML files
+    if malformed_files:
+        for mf, exc in malformed_files:
+            print(f"ERROR: [TEST_REPORT_PARSE_FAILURE] {exc}", file=sys.stderr)
+        return EXIT_MALFORMED_XML
+
+    # 3. Check for missing or empty report directories
+    if missing_dirs:
+        for md in missing_dirs:
+            print(f"ERROR: [TEST_REPORT_ERROR] Test results directory does not exist or is not a directory: {md}", file=sys.stderr)
+        return EXIT_MISSING_OR_EMPTY
+
+    if empty_dirs:
+        for ed in empty_dirs:
+            print(f"ERROR: [TEST_REPORT_ERROR] No Gradle JUnit XML reports (TEST-*.xml) found in: {ed}", file=sys.stderr)
+        return EXIT_MISSING_OR_EMPTY
+
+    if total_suites == 0 or total_tests == 0:
+        print(
+            f"ERROR: [TEST_REPORT_ERROR] Zero unit tests recorded across {total_suites} suite(s).",
+            file=sys.stderr,
+        )
+        return EXIT_MISSING_OR_EMPTY
 
     print(
         f"SUCCESS: Executed {total_tests} unit tests across {total_suites} suites "
-        f"(skipped={total_skipped}, failures=0, errors=0)."
+        f"({total_passed} passed, skipped={total_skipped}, failures=0, errors=0)."
     )
     return EXIT_OK
 

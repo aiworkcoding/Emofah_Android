@@ -373,8 +373,10 @@ object ReceiptLayoutParser {
 
             val hitCount = tokens.count { t ->
                 prodTokens.any { pt ->
-                    pt == t || (pt.length >= 3 && (t == "${pt}s" || t == "${pt}es" || pt == "${subPlural(pt)}")) ||
-                        (t.length >= 3 && (pt == "${t}s" || pt == "${t}es"))
+                    pt == t ||
+                        (pt.length >= 3 && (t == "${pt}s" || t == "${pt}es")) ||
+                        (t.length >= 3 && (pt == "${t}s" || pt == "${t}es")) ||
+                        (t.length >= 3 && pt.length >= 3 && subPlural(t) == subPlural(pt))
                 }
             }
             if (hitCount == 0 && !exactSkuMatch && !exactBarcodeMatch) continue
