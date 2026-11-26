@@ -103,7 +103,7 @@ class RolePermissionsStage92Test {
         val elevated = RolePermissionPolicy.reconcileSessionWithServerProfile(baseSession, activeSupervisor)
         assertTrue(elevated is ServerProfileReconciliation.Active)
         val updatedSession = (elevated as ServerProfileReconciliation.Active).session
-        assertEquals(StaffRole.OWNER_MANAGER, updatedSession.staffRole)
+        assertEquals(StaffRole.SUPERVISOR, updatedSession.staffRole)
         assertEquals("Grace Mutua", updatedSession.displayName)
 
         // Even if an old profile row has is_active=false, normal app usage is never blocked

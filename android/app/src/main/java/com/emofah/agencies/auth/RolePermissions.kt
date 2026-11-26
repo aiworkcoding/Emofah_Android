@@ -180,7 +180,7 @@ object RolePermissionPolicy {
         }
         return ServerProfileReconciliation.Active(
             session.copy(
-                staffRole = StaffRole.OWNER_MANAGER,
+                staffRole = profile.staffRole,
                 displayName = profile.fullName?.takeIf { it.isNotBlank() } ?: session.displayName,
                 rawRoleClaim = profile.staffRole.name,
             )
