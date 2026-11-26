@@ -196,8 +196,8 @@ class ReceiptParserAndValidatorStageTest {
         val rawText = """
             RANDOM SUPPLIERS
             Invoice: INV-992
-            2 Ream A4 Unmatched Printing Paper 1 1200.00 1200.00
-            Total: Ksh 1200.00
+            Box of Heavy Duty Staples 2 150.00 300.00
+            Total: Ksh 300.00
         """.trimIndent()
 
         val draft = ReceiptLayoutParser.parseRawText(
