@@ -2,9 +2,12 @@
 # sdk.dir=/path/to/Android/sdk
 
 # Shared Emofah Supabase Backend (Project Reference ID: nbmmfdiqywmkjaltezro)
-# Publishable anon key only - NEVER put service_role here
+# Primary client API key (Modern Publishable Key) - NEVER put service_role or secret keys here
 SUPABASE_URL=https://nbmmfdiqywmkjaltezro.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_IYNhHXjZ1lPPdRFIpKuonA_ydMHV4t3
+SUPABASE_ANON_KEY=sb_publishable_IYNhHXjZ1lPPdRFIpKuonA_ydMHV4t3
+# Optional legacy JWT compatibility (leave commented unless legacy JWT is explicitly supplied):
+# SUPABASE_LEGACY_JWT=
 PUBLIC_STORAGE_BASE_URL=https://nbmmfdiqywmkjaltezro.supabase.co/storage/v1/object/public/product-images/
 # Optional: override cloud recognition endpoint (defaults to SUPABASE_URL/functions/v1/recognize-product)
 # CLOUD_RECOGNITION_URL=https://nbmmfdiqywmkjaltezro.supabase.co/functions/v1/recognize-product

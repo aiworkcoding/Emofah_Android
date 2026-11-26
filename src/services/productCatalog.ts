@@ -61,23 +61,10 @@ export interface RecognitionIndexSnapshot {
   entries: RecognitionReferenceEntry[];
 }
 
-const SUPABASE_URL =
-  import.meta.env.VITE_SUPABASE_URL ||
-  'https://nbmmfdiqywmkjaltezro.supabase.co';
-const SUPABASE_ANON_KEY =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs';
-const PUBLIC_STORAGE_BASE_URL =
-  import.meta.env.VITE_SUPABASE_PUBLIC_STORAGE_BASE_URL ||
-  'https://nbmmfdiqywmkjaltezro.supabase.co/storage/v1/object/public/product-images/';
+import { supabaseConfig } from './supabaseConfig';
 
 function normalizeProductImageUrl(raw: string | null | undefined): string | null {
-  const trimmed = raw?.trim();
-  if (!trimmed) return null;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  const base = PUBLIC_STORAGE_BASE_URL.replace(/\/+$/, '');
-  const rel = trimmed.replace(/^\/+/, '').replace(/^product-images\//, '');
-  return `${base}/${rel}`;
+  return supabaseConfig.normalizeProductImageUrl(raw);
 }
 
 const CATALOG_CACHE_KEY = 'emofah-supabase-products-cache-v1';
@@ -273,16 +260,12 @@ export async function fetchLiveSupabaseCatalog(): Promise<{
 }> {
   try {
     const url =
-      `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/products` +
+      `${supabaseConfig.getUrl()}/rest/v1/products` +
       `?select=id,name,qty,sell_price,buy_price,image_url,category,created_at,description,discount_price,is_featured` +
       `&order=id.asc&limit=1000`;
 
     const res = await fetch(url, {
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        Accept: 'application/json',
-      },
+      headers: supabaseConfig.getHeaders(),
     });
 
     if (!res.ok) {

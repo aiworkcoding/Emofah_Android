@@ -36,13 +36,30 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         val supabaseUrl = readConfigValue("SUPABASE_URL").ifBlank { "https://nbmmfdiqywmkjaltezro.supabase.co" }
-        val supabaseAnonKey = readConfigValue("SUPABASE_ANON_KEY").ifBlank { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs" }
+        val rawPublishableKey = readConfigValue("SUPABASE_PUBLISHABLE_KEY")
+        val rawLegacyJwt = readConfigValue("SUPABASE_LEGACY_JWT")
+        val rawAnonKey = readConfigValue("SUPABASE_ANON_KEY")
+
+        val supabasePublishableKey = rawPublishableKey.ifBlank {
+            if (rawAnonKey.startsWith("sb_publishable_")) rawAnonKey else ""
+        }.ifBlank {
+            "sb_publishable_IYNhHXjZ1lPPdRFIpKuonA_ydMHV4t3"
+        }
+
+        val supabaseLegacyKey = rawLegacyJwt.ifBlank {
+            if (rawAnonKey.startsWith("eyJ")) rawAnonKey else ""
+        }
+
+        val supabaseAnonKey = if (rawAnonKey.isNotBlank()) rawAnonKey else supabasePublishableKey
+
         val publicStorageBaseUrl = readConfigValue("PUBLIC_STORAGE_BASE_URL").ifBlank {
             "https://nbmmfdiqywmkjaltezro.supabase.co/storage/v1/object/public/product-images/"
         }
         val cloudRecognitionUrl = readConfigValue("CLOUD_RECOGNITION_URL")
         buildConfigField("String", "SUPABASE_URL", "\"${escapeBuildConfigString(supabaseUrl)}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${escapeBuildConfigString(supabaseAnonKey)}\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"${escapeBuildConfigString(supabasePublishableKey)}\"")
+        buildConfigField("String", "SUPABASE_LEGACY_JWT", "\"${escapeBuildConfigString(supabaseLegacyKey)}\"")
         buildConfigField("String", "PUBLIC_STORAGE_BASE_URL", "\"${escapeBuildConfigString(publicStorageBaseUrl)}\"")
         buildConfigField("String", "CLOUD_RECOGNITION_URL", "\"${escapeBuildConfigString(cloudRecognitionUrl)}\"")
     }

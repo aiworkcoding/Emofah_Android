@@ -8,22 +8,12 @@ import {
   type SharedFinancialTransaction,
 } from './financialBalance';
 
-const SUPABASE_URL = (
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
-  'https://nbmmfdiqywmkjaltezro.supabase.co'
-).replace(/\/+$/, '');
+import { supabaseConfig } from './supabaseConfig';
 
-const SUPABASE_ANON_KEY =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs';
+const SUPABASE_URL = supabaseConfig.getUrl();
 
 function supabaseHeaders(): Record<string, string> {
-  return {
-    apikey: SUPABASE_ANON_KEY,
-    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
+  return supabaseConfig.getHeaders();
 }
 
 function toNumberOrNull(value: unknown): number | null {
@@ -421,10 +411,7 @@ export function subscribeToTransactionUpdates(options: {
     if (closed) return;
     clearTimers();
 
-    const wsBase = SUPABASE_URL.replace(/^https:\/\//i, 'wss://').replace(/^http:\/\//i, 'ws://');
-    const wsUrl = `${wsBase}/realtime/v1/websocket?apikey=${encodeURIComponent(
-      SUPABASE_ANON_KEY
-    )}&vsn=1.0.0`;
+    const wsUrl = supabaseConfig.getRealtimeWebSocketUrl();
 
     try {
       socket = new WebSocket(wsUrl);
@@ -454,7 +441,7 @@ export function subscribeToTransactionUpdates(options: {
                 },
               ],
             },
-            access_token: SUPABASE_ANON_KEY,
+            access_token: supabaseConfig.getApiKey(),
           },
           ref: joinRef,
         })

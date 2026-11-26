@@ -26,14 +26,10 @@ interface RpcCheckItem {
   message?: string;
 }
 
-const SUPABASE_URL =
-  import.meta.env.VITE_SUPABASE_URL ||
-  'https://nbmmfdiqywmkjaltezro.supabase.co';
-const SUPABASE_ANON_KEY =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ibW1mZGlxeXdta2phbHRlenJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTcwNzQsImV4cCI6MjA4MzEzMzA3NH0.LvAJ0xmBohmOKW-7Va8poTsbqJACNMY87SAnZnzqqTs';
+import { supabaseConfig } from '../services/supabaseConfig';
 
-const SUPABASE_PROJECT_ID = 'nbmmfdiqywmkjaltezro';
+const SUPABASE_URL = supabaseConfig.getUrl();
+const SUPABASE_PROJECT_ID = supabaseConfig.getProjectId();
 const SQL_EDITOR_URL = `https://supabase.com/dashboard/project/${SUPABASE_PROJECT_ID}/sql/new`;
 
 export function BackendSetupView({ reducedMotion = false }: { reducedMotion?: boolean }) {
@@ -196,10 +192,7 @@ export function BackendSetupView({ reducedMotion = false }: { reducedMotion?: bo
       try {
         if (item.type === 'TABLE') {
           const res = await fetch(`${SUPABASE_URL}/rest/v1/${item.name.replace('public.', '')}?select=id&limit=1`, {
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
+            headers: supabaseConfig.getHeaders(),
           });
           if (res.ok) {
             item.status = 'DEPLOYED';
@@ -212,11 +205,7 @@ export function BackendSetupView({ reducedMotion = false }: { reducedMotion?: bo
           // Send an empty or dummy payload to check if RPC route exists (404 / PGRST202 vs 200/400)
           const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${item.name}`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
+            headers: supabaseConfig.getHeaders(),
             body: JSON.stringify({}),
           });
           const text = await res.text();
@@ -230,10 +219,7 @@ export function BackendSetupView({ reducedMotion = false }: { reducedMotion?: bo
           }
         } else if (item.type === 'STORAGE') {
           const res = await fetch(`${SUPABASE_URL}/storage/v1/bucket/${item.name}`, {
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
+            headers: supabaseConfig.getHeaders(),
           });
           if (res.ok) {
             item.status = 'DEPLOYED';
@@ -349,8 +335,18 @@ ON CONFLICT (user_id) DO UPDATE SET staff_role = EXCLUDED.staff_role;`;
             )}
           </div>
 
-          <div className="text-xs font-mono text-[#64748b] dark:text-[#94a3b8] truncate max-w-xs sm:max-w-md">
-            Project: <span className="text-[#14558a] dark:text-[#43b1d4]">{SUPABASE_PROJECT_ID}</span>
+          <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-[#64748b] dark:text-[#94a3b8]">
+            <div>
+              Project: <span className="font-semibold text-[#14558a] dark:text-[#43b1d4]">{SUPABASE_PROJECT_ID}</span>
+            </div>
+            <span className="hidden sm:inline text-gray-300 dark:text-gray-700">•</span>
+            <div className="flex items-center gap-1.5">
+              <span>API Key:</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <ShieldCheck className="w-3 h-3" />
+                {supabaseConfig.getKeyType() === 'PUBLISHABLE' ? 'Modern Publishable' : 'Legacy JWT'} ({supabaseConfig.getRedactedKey()})
+              </span>
+            </div>
           </div>
         </div>
       </div>
