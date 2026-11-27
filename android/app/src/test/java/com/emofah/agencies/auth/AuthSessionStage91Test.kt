@@ -160,4 +160,38 @@ class AuthSessionStage91Test {
         assertEquals(StaffRole.SUPERVISOR, AuthSessionPolicy.mapRoleFromClaims("supervisor", "staff@emofah.co.ke"))
         assertEquals(StaffRole.OWNER_MANAGER, AuthSessionPolicy.mapRoleFromClaims("owner_manager", "staff@emofah.co.ke"))
     }
+
+    @Test
+    fun parseAuthResponse_handlesGoogleIdTokenAndRecoveryResponses() {
+        val now = 1_700_000_000_000L
+        val json = """
+            {
+              "access_token": "google.access.token.789",
+              "refresh_token": "google.refresh.token.xyz",
+              "expires_in": 3600,
+              "user": {
+                "id": "google-user-01",
+                "email": "google.staff@emofah.co.ke",
+                "app_metadata": {
+                  "role": "owner_manager"
+                },
+                "user_metadata": {
+                  "full_name": "Google Staff"
+                }
+              }
+            }
+        """.trimIndent()
+
+        val res = SupabaseAuthClient.parseAuthResponse(
+            httpStatus = 200,
+            responseBody = json,
+            nowEpochMs = now,
+        )
+
+        assertTrue(res is AuthRpcResult.Success)
+        val session = (res as AuthRpcResult.Success).session
+        assertEquals("google.access.token.789", session.accessToken)
+        assertEquals("google.staff@emofah.co.ke", session.email)
+        assertEquals(StaffRole.OWNER_MANAGER, session.staffRole)
+    }
 }

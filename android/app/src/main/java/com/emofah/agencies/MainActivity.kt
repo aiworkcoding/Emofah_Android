@@ -2038,6 +2038,58 @@ fun EmofahAppShell(
                     }
                 }
             },
+            onRequestPasswordRecovery = { email, onSent ->
+                scope.launch {
+                    val res = authRepository.requestPasswordRecovery(email)
+                    onSent(res is AuthOtpResult.OtpSent)
+                }
+            },
+            onVerifyRecoveryCode = { email, code ->
+                scope.launch {
+                    val outcome = authRepository.verifyRecoveryCode(email, code)
+                    if (outcome is AuthActionOutcome.SignedIn) {
+                        syncUiMessage = "Recovery verified. Enter your new password."
+                    }
+                }
+            },
+            onUpdatePassword = { password ->
+                scope.launch {
+                    val outcome = authRepository.updatePassword(password)
+                    if (outcome is AuthActionOutcome.SignedIn) {
+                        showAuthDialog = false
+                        syncUiMessage = "Password updated and signed in successfully."
+                    }
+                }
+            },
+            onSignInWithGoogle = {
+                scope.launch {
+                    try {
+                        val credentialManager = androidx.credentials.CredentialManager.create(this@MainActivity)
+                        val googleIdOption = androidx.credentials.GetGoogleIdOption.Builder()
+                            .setServerClientId("345557228095-apps.googleusercontent.com")
+                            .setFilterByAuthorizedAccounts(false)
+                            .build()
+                        val request = androidx.credentials.GetCredentialRequest.Builder()
+                            .addCredentialOption(googleIdOption)
+                            .build()
+                        val result = credentialManager.getCredential(this@MainActivity, request)
+                        val credential = result.credential
+                        if (credential is androidx.credentials.CustomCredential &&
+                            credential.type == com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                        ) {
+                            val googleIdTokenCredential = com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.createFrom(credential.data)
+                            val idToken = googleIdTokenCredential.idToken
+                            val outcome = authRepository.signInWithGoogle(idToken)
+                            if (outcome is AuthActionOutcome.SignedIn) {
+                                showAuthDialog = false
+                                syncUiMessage = "Signed in with Google as ${outcome.session.email}."
+                            }
+                        }
+                    } catch (e: Exception) {
+                        syncUiMessage = "Google Sign-In canceled or failed: ${e.message}"
+                    }
+                }
+            },
             onRefreshExisting = {
                 scope.launch {
                     val outcome = authRepository.ensureFreshSessionIfOnline(forceRefresh = true)

@@ -24,6 +24,10 @@ sealed class AuthOtpResult {
 interface SupabaseAuthGateway {
     suspend fun requestOtp(email: String): AuthOtpResult
     suspend fun verifyOtp(email: String, token: String): AuthRpcResult
+    suspend fun requestPasswordRecovery(email: String): AuthOtpResult
+    suspend fun verifyRecoveryToken(email: String, token: String): AuthRpcResult
+    suspend fun updatePassword(accessToken: String, newPassword: String): AuthRpcResult
+    suspend fun signInWithGoogleIdToken(idToken: String): AuthRpcResult
     suspend fun refreshSession(refreshToken: String): AuthRpcResult
     suspend fun fetchStaffProfile(accessToken: String): ServerStaffProfile? = null
     suspend fun bootstrapInitialAdmin(
@@ -118,6 +122,139 @@ class SupabaseAuthClient(
             put("email", email.trim())
             put("token", token.trim())
             put("type", "email")
+        }.toString()
+
+        executeTokenRequest(
+            endpoint = endpoint,
+            payload = payload,
+            existingAuthEpochMs = null,
+            isRefresh = false,
+        )
+    }
+
+    override suspend fun requestPasswordRecovery(email: String): AuthOtpResult = withContext(Dispatchers.IO) {
+        if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
+            return@withContext AuthOtpResult.TransientError("Supabase URL/anon key not configured.")
+        }
+
+        val endpoint = "${supabaseUrl.trimEnd('/')}/auth/v1/recover"
+        val payload = JSONObject().apply {
+            put("email", email.trim())
+        }.toString()
+
+        var conn: HttpURLConnection? = null
+        try {
+            conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            conn.outputStream.use { out ->
+                out.write(payload.toByteArray(Charsets.UTF_8))
+            }
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code in 200..299) {
+                AuthOtpResult.OtpSent("Password recovery code sent to $email. Check your inbox.")
+            } else {
+                val errJson = runCatching { JSONObject(body) }.getOrNull()
+                val errCode = errJson?.optString("error_code", "").orEmpty()
+                val errMsg = listOfNotNull(
+                    errJson?.optString("error_description", "")?.takeIf { it.isNotBlank() && it != "null" },
+                    errJson?.optString("message", "")?.takeIf { it.isNotBlank() && it != "null" },
+                ).firstOrNull() ?: "Could not request password recovery (HTTP $code)."
+
+                AuthOtpResult.AuthRejected(code = errCode.ifBlank { "HTTP_$code" }, message = errMsg)
+            }
+        } catch (e: Exception) {
+            AuthOtpResult.TransientError(e.message ?: "Network error during password recovery request.")
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    override suspend fun verifyRecoveryToken(email: String, token: String): AuthRpcResult = withContext(Dispatchers.IO) {
+        if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
+            return@withContext AuthRpcResult.TransientError("Supabase URL/anon key not configured.")
+        }
+
+        val endpoint = "${supabaseUrl.trimEnd('/')}/auth/v1/verify"
+        val payload = JSONObject().apply {
+            put("email", email.trim())
+            put("token", token.trim())
+            put("type", "recovery")
+        }.toString()
+
+        executeTokenRequest(
+            endpoint = endpoint,
+            payload = payload,
+            existingAuthEpochMs = null,
+            isRefresh = false,
+        )
+    }
+
+    override suspend fun updatePassword(accessToken: String, newPassword: String): AuthRpcResult = withContext(Dispatchers.IO) {
+        if (!supabaseUrl.startsWith("https://") || anonKey.isBlank() || accessToken.isBlank()) {
+            return@withContext AuthRpcResult.TransientError("Supabase URL/anon key not configured.")
+        }
+
+        val endpoint = "${supabaseUrl.trimEnd('/')}/auth/v1/user"
+        val payload = JSONObject().apply {
+            put("password", newPassword)
+        }.toString()
+
+        var conn: HttpURLConnection? = null
+        try {
+            conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "PUT"
+                connectTimeout = 8_000
+                readTimeout = 10_000
+                doOutput = true
+                setRequestProperty("apikey", anonKey)
+                setRequestProperty("Authorization", "Bearer $accessToken")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+            }
+
+            conn.outputStream.use { out ->
+                out.write(payload.toByteArray(Charsets.UTF_8))
+            }
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            parseAuthResponse(
+                httpStatus = code,
+                responseBody = body,
+                nowEpochMs = clockEpochMs(),
+                existingAuthEpochMs = null,
+                isRefresh = false,
+            )
+        } catch (e: Exception) {
+            AuthRpcResult.TransientError(e.message ?: "Network error during password update.")
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    override suspend fun signInWithGoogleIdToken(idToken: String): AuthRpcResult = withContext(Dispatchers.IO) {
+        if (!supabaseUrl.startsWith("https://") || anonKey.isBlank()) {
+            return@withContext AuthRpcResult.TransientError("Supabase URL/anon key not configured.")
+        }
+
+        val endpoint = "${supabaseUrl.trimEnd('/')}/auth/v1/token?grant_type=id_token"
+        val payload = JSONObject().apply {
+            put("provider", "google")
+            put("id_token", idToken)
         }.toString()
 
         executeTokenRequest(

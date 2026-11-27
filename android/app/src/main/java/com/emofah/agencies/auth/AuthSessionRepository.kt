@@ -159,6 +159,133 @@ class AuthSessionRepository(
         }
     }
 
+    suspend fun requestPasswordRecovery(emailInput: String): AuthOtpResult = withContext(Dispatchers.IO) {
+        val email = emailInput.trim()
+        if (email.isBlank() || !email.contains("@")) {
+            return@withContext AuthOtpResult.AuthRejected("INVALID_EMAIL", "Enter a valid registered email address.")
+        }
+        _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
+        val result = authGateway.requestPasswordRecovery(email)
+        _uiState.value = _uiState.value.copy(
+            isBusy = false,
+            lastError = when (result) {
+                is AuthOtpResult.OtpSent -> null
+                is AuthOtpResult.AuthRejected -> result.message
+                is AuthOtpResult.TransientError -> result.message
+            }
+        )
+        result
+    }
+
+    suspend fun verifyRecoveryCode(emailInput: String, tokenInput: String): AuthActionOutcome = withContext(Dispatchers.IO) {
+        val email = emailInput.trim()
+        val token = tokenInput.trim()
+        if (email.isBlank() || token.isBlank()) {
+            return@withContext AuthActionOutcome.Rejected("Enter your email and the recovery code.")
+        }
+        _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
+        return@withContext when (val rpc = authGateway.verifyRecoveryToken(email, token)) {
+            is AuthRpcResult.Success -> {
+                when (val reconciled = reconcileServerProfile(rpc.session)) {
+                    is ServerProfileReconciliation.Deactivated -> {
+                        sessionStore.clearSession()
+                        _uiState.value = evaluateCurrentUiState().copy(isBusy = false, lastError = reconciled.message)
+                        AuthActionOutcome.Rejected(reconciled.message)
+                    }
+                    is ServerProfileReconciliation.Active -> {
+                        val session = reconciled.session
+                        sessionStore.saveSession(session)
+                        val nextState = evaluateCurrentUiState()
+                        _uiState.value = nextState
+                        syncIdentityFromState(nextState)
+                        AuthActionOutcome.SignedIn(session)
+                    }
+                }
+            }
+            is AuthRpcResult.AuthRejected -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = rpc.message)
+                AuthActionOutcome.Rejected(rpc.message)
+            }
+            is AuthRpcResult.TransientError -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = rpc.message)
+                AuthActionOutcome.TransientFailure(rpc.message)
+            }
+        }
+    }
+
+    suspend fun updatePassword(passwordInput: String): AuthActionOutcome = withContext(Dispatchers.IO) {
+        val password = passwordInput.trim()
+        if (password.length < 6) {
+            return@withContext AuthActionOutcome.Rejected("New password must be at least 6 characters.")
+        }
+        val currentSession = sessionStore.readSession()
+            ?: return@withContext AuthActionOutcome.Rejected("Complete recovery verification first.")
+
+        _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
+        return@withContext when (val rpc = authGateway.updatePassword(currentSession.accessToken, password)) {
+            is AuthRpcResult.Success -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = null)
+                AuthActionOutcome.SignedIn(currentSession)
+            }
+            is AuthRpcResult.AuthRejected -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = rpc.message)
+                AuthActionOutcome.Rejected(rpc.message)
+            }
+            is AuthRpcResult.TransientError -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = rpc.message)
+                AuthActionOutcome.TransientFailure(rpc.message)
+            }
+        }
+    }
+
+    suspend fun signInWithGoogle(idToken: String): AuthActionOutcome = withContext(Dispatchers.IO) {
+        val token = idToken.trim()
+        if (token.isBlank()) {
+            return@withContext AuthActionOutcome.Rejected("Invalid Google identity token.")
+        }
+        _uiState.value = _uiState.value.copy(isBusy = true, lastError = null)
+        return@withContext when (val rpc = authGateway.signInWithGoogleIdToken(token)) {
+            is AuthRpcResult.Success -> {
+                when (val reconciled = reconcileServerProfile(rpc.session)) {
+                    is ServerProfileReconciliation.Deactivated -> {
+                        sessionStore.clearSession()
+                        identityProvider.setAuthenticatedActorId(null)
+                        identityProvider.setStaffRole(StaffRole.CASHIER)
+                        _uiState.value = evaluateCurrentUiState().copy(isBusy = false, lastError = reconciled.message)
+                        AuthActionOutcome.Rejected(reconciled.message)
+                    }
+                    is ServerProfileReconciliation.Active -> {
+                        val session = reconciled.session
+                        sessionStore.saveSession(session)
+                        val nextState = evaluateCurrentUiState()
+                        _uiState.value = nextState
+                        syncIdentityFromState(nextState)
+                        appendAuthAudit(
+                            operation = "AUTH_SIGN_IN_GOOGLE",
+                            actorId = nextState.activeActorId,
+                            reason = "Signed in via Google as ${session.email} (${session.staffRole.name})",
+                            afterJson = JSONObject().apply {
+                                put("user_id", session.userId)
+                                put("email", session.email)
+                                put("staff_role", session.staffRole.name)
+                            }.toString(),
+                        )
+                        runCatching { onAuthenticationRestored() }
+                        AuthActionOutcome.SignedIn(session)
+                    }
+                }
+            }
+            is AuthRpcResult.AuthRejected -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = rpc.message)
+                AuthActionOutcome.Rejected(rpc.message)
+            }
+            is AuthRpcResult.TransientError -> {
+                _uiState.value = _uiState.value.copy(isBusy = false, lastError = rpc.message)
+                AuthActionOutcome.TransientFailure(rpc.message)
+            }
+        }
+    }
+
     suspend fun ensureFreshSessionIfOnline(forceRefresh: Boolean = false): AuthActionOutcome? = withContext(Dispatchers.IO) {
         refreshMutex.withLock {
             val stored = sessionStore.readSession() ?: run {

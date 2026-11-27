@@ -287,6 +287,10 @@ fun StaffSignInDialog(
     onDismiss: () -> Unit,
     onRequestOtp: (email: String, onSent: (Boolean) -> Unit) -> Unit,
     onVerifyOtp: (email: String, token: String) -> Unit,
+    onRequestPasswordRecovery: (email: String, onSent: (Boolean) -> Unit) -> Unit = { _, _ -> },
+    onVerifyRecoveryCode: (email: String, code: String) -> Unit = { _, _ -> },
+    onUpdatePassword: (password: String) -> Unit = {},
+    onSignInWithGoogle: () -> Unit = {},
     onRefreshExisting: () -> Unit,
     onSignOut: () -> Unit,
     onBootstrapInitialAdmin: () -> Unit = {},
@@ -299,6 +303,12 @@ fun StaffSignInDialog(
     }
     var otpTokenInput by remember { mutableStateOf("") }
     var otpSent by remember { mutableStateOf(false) }
+
+    // Forgot password flow state: 0 = normal, 1 = request email, 2 = enter code, 3 = new password
+    var forgotStep by remember { mutableStateOf(0) }
+    var recoveryCodeInput by remember { mutableStateOf("") }
+    var newPasswordInput by remember { mutableStateOf("") }
+    var confirmPasswordInput by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = {
@@ -327,16 +337,22 @@ fun StaffSignInDialog(
                 }
                 Column {
                     Text(
-                        text = when (authState.status) {
-                            AuthStatus.SESSION_EXPIRED -> "Sign In Again"
-                            AuthStatus.AUTHENTICATED, AuthStatus.OFFLINE_CACHED -> "Your Staff Account"
-                            AuthStatus.UNAUTHENTICATED -> "Email Code Sign In"
+                        text = when {
+                            forgotStep == 1 -> "Forgot Password"
+                            forgotStep == 2 -> "Verify Recovery Code"
+                            forgotStep == 3 -> "Set New Password"
+                            authState.status == AuthStatus.SESSION_EXPIRED -> "Sign In Again"
+                            authState.status == AuthStatus.AUTHENTICATED || authState.status == AuthStatus.OFFLINE_CACHED -> "Your Staff Account"
+                            else -> "Staff Sign In"
                         },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = "Passwordless 6-digit staff login",
+                        text = when {
+                            forgotStep > 0 -> "Secure account recovery"
+                            else -> "Email code or Google sign in"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.textMuted,
                     )
@@ -393,77 +409,164 @@ fun StaffSignInDialog(
                         )
                     }
                 } else {
-                    Text(
-                        text = if (isOnline) {
-                            if (!otpSent) {
-                                "Enter your email address. We will send you a 6-digit login code — no password needed."
-                            } else {
-                                "We sent a 6-digit login code to $emailInput. Check your email and enter the code below."
-                            }
-                        } else {
-                            "No internet right now. You need internet to sign in, but you can still record sales offline."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.textMuted,
-                    )
-
-                    OutlinedTextField(
-                        value = emailInput,
-                        onValueChange = { emailInput = it },
-                        label = { Text("Your Email Address") },
-                        singleLine = true,
-                        enabled = !authState.isBusy && !otpSent,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = colors.borderSubtle,
-                        ),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    if (otpSent) {
-                        OutlinedTextField(
-                            value = otpTokenInput,
-                            onValueChange = { otpTokenInput = it.filter { ch -> ch.isDigit() || ch == ' ' }.trim() },
-                            label = { Text("6-Digit Email Code") },
-                            placeholder = { Text("e.g. 123456") },
-                            singleLine = true,
-                            enabled = !authState.isBusy,
-                            shape = RoundedCornerShape(12.dp),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            TextButton(
-                                onClick = {
-                                    otpSent = false
-                                    otpTokenInput = ""
-                                },
-                                enabled = !authState.isBusy,
-                            ) {
-                                Text("Change Email")
-                            }
-                            TextButton(
-                                onClick = {
-                                    onRequestOtp(emailInput) { sent ->
-                                        otpSent = sent
+                    when (forgotStep) {
+                        0 -> {
+                            Text(
+                                text = if (isOnline) {
+                                    if (!otpSent) {
+                                        "Sign in with your email code, or continue securely with Google."
+                                    } else {
+                                        "We sent a 6-digit login code to $emailInput. Check your inbox."
                                     }
+                                } else {
+                                    "No internet right now. Connect to the internet to sign in."
                                 },
-                                enabled = !authState.isBusy && isOnline,
-                            ) {
-                                Text("Resend Code")
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textMuted,
+                            )
+
+                            OutlinedTextField(
+                                value = emailInput,
+                                onValueChange = { emailInput = it },
+                                label = { Text("Your Email Address") },
+                                singleLine = true,
+                                enabled = !authState.isBusy && !otpSent,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = colors.borderSubtle,
+                                ),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+
+                            if (otpSent) {
+                                OutlinedTextField(
+                                    value = otpTokenInput,
+                                    onValueChange = { otpTokenInput = it.filter { ch -> ch.isDigit() || ch == ' ' }.trim() },
+                                    label = { Text("6-Digit Email Code") },
+                                    placeholder = { Text("e.g. 123456") },
+                                    singleLine = true,
+                                    enabled = !authState.isBusy,
+                                    shape = RoundedCornerShape(12.dp),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            otpSent = false
+                                            otpTokenInput = ""
+                                        },
+                                        enabled = !authState.isBusy,
+                                    ) {
+                                        Text("Change Email")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            onRequestOtp(emailInput) { sent ->
+                                                otpSent = sent
+                                            }
+                                        },
+                                        enabled = !authState.isBusy && isOnline,
+                                    ) {
+                                        Text("Resend Code")
+                                    }
+                                }
+                            } else {
+                                // Continue with Google button
+                                OutlinedButton(
+                                    onClick = onSignInWithGoogle,
+                                    enabled = !authState.isBusy && isOnline,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Continue with Google")
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                ) {
+                                    TextButton(
+                                        onClick = { forgotStep = 1 },
+                                        enabled = !authState.isBusy,
+                                    ) {
+                                        Text("Forgot password?")
+                                    }
+                                }
                             }
+                        }
+
+                        1 -> {
+                            Text(
+                                text = "Enter your registered email address to receive a password recovery verification code.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textMuted,
+                            )
+                            OutlinedTextField(
+                                value = emailInput,
+                                onValueChange = { emailInput = it },
+                                label = { Text("Registered Email") },
+                                singleLine = true,
+                                enabled = !authState.isBusy,
+                                shape = RoundedCornerShape(12.dp),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+
+                        2 -> {
+                            Text(
+                                text = "Enter the verification code sent to $emailInput.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textMuted,
+                            )
+                            OutlinedTextField(
+                                value = recoveryCodeInput,
+                                onValueChange = { recoveryCodeInput = it.trim() },
+                                label = { Text("Recovery Verification Code") },
+                                singleLine = true,
+                                enabled = !authState.isBusy,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+
+                        3 -> {
+                            Text(
+                                text = "Enter a secure new password for your account (at least 6 characters).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textMuted,
+                            )
+                            OutlinedTextField(
+                                value = newPasswordInput,
+                                onValueChange = { newPasswordInput = it },
+                                label = { Text("New Password") },
+                                singleLine = true,
+                                enabled = !authState.isBusy,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = confirmPasswordInput,
+                                onValueChange = { confirmPasswordInput = it },
+                                label = { Text("Confirm New Password") },
+                                singleLine = true,
+                                enabled = !authState.isBusy,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                         }
                     }
                 }
 
                 authState.lastError?.let { err ->
                     EmofahFeedbackBanner(
-                        title = "Sign in error",
+                        title = "Authentication notice",
                         message = err,
                         tone = EmofahBadgeTone.DANGER,
                     )
@@ -492,41 +595,96 @@ fun StaffSignInDialog(
                     }
                 }
             } else {
-                if (!otpSent) {
-                    EmofahLoadingButton(
-                        text = "Send Email Code",
-                        loadingText = "Sending...",
-                        isLoading = authState.isBusy,
-                        enabled = !authState.isBusy && emailInput.isNotBlank() && emailInput.contains("@"),
-                        height = 44.dp,
-                        onClick = {
-                            if (emailInput.isNotBlank()) {
-                                onRequestOtp(emailInput) { sent ->
-                                    otpSent = sent
+                when (forgotStep) {
+                    0 -> {
+                        if (!otpSent) {
+                            EmofahLoadingButton(
+                                text = "Send Email Code",
+                                loadingText = "Sending...",
+                                isLoading = authState.isBusy,
+                                enabled = !authState.isBusy && emailInput.isNotBlank() && emailInput.contains("@"),
+                                height = 44.dp,
+                                onClick = {
+                                    if (emailInput.isNotBlank()) {
+                                        onRequestOtp(emailInput) { sent ->
+                                            otpSent = sent
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.width(176.dp),
+                            )
+                        } else {
+                            EmofahLoadingButton(
+                                text = "Sign In",
+                                loadingText = "Checking...",
+                                isLoading = authState.isBusy,
+                                enabled = !authState.isBusy && otpTokenInput.length >= 4,
+                                height = 44.dp,
+                                onClick = { onVerifyOtp(emailInput, otpTokenInput) },
+                                modifier = Modifier.width(150.dp),
+                            )
+                        }
+                    }
+
+                    1 -> {
+                        EmofahLoadingButton(
+                            text = "Send Recovery Code",
+                            loadingText = "Sending...",
+                            isLoading = authState.isBusy,
+                            enabled = !authState.isBusy && emailInput.isNotBlank() && emailInput.contains("@"),
+                            height = 44.dp,
+                            onClick = {
+                                onRequestPasswordRecovery(emailInput) { sent ->
+                                    if (sent) forgotStep = 2
                                 }
-                            }
-                        },
-                        modifier = Modifier.width(176.dp),
-                    )
-                } else {
-                    EmofahLoadingButton(
-                        text = "Sign In",
-                        loadingText = "Checking...",
-                        isLoading = authState.isBusy,
-                        enabled = !authState.isBusy && otpTokenInput.length >= 4,
-                        height = 44.dp,
-                        onClick = { onVerifyOtp(emailInput, otpTokenInput) },
-                        modifier = Modifier.width(150.dp),
-                    )
+                            },
+                            modifier = Modifier.width(190.dp),
+                        )
+                    }
+
+                    2 -> {
+                        EmofahLoadingButton(
+                            text = "Verify Code",
+                            loadingText = "Verifying...",
+                            isLoading = authState.isBusy,
+                            enabled = !authState.isBusy && recoveryCodeInput.isNotBlank(),
+                            height = 44.dp,
+                            onClick = {
+                                onVerifyRecoveryCode(emailInput, recoveryCodeInput)
+                                forgotStep = 3
+                            },
+                            modifier = Modifier.width(150.dp),
+                        )
+                    }
+
+                    3 -> {
+                        EmofahLoadingButton(
+                            text = "Update Password",
+                            loadingText = "Updating...",
+                            isLoading = authState.isBusy,
+                            enabled = !authState.isBusy && newPasswordInput.length >= 6 && newPasswordInput == confirmPasswordInput,
+                            height = 44.dp,
+                            onClick = {
+                                onUpdatePassword(newPasswordInput)
+                            },
+                            modifier = Modifier.width(170.dp),
+                        )
+                    }
                 }
             }
         },
         dismissButton = {
             TextButton(
-                onClick = onDismiss,
+                onClick = {
+                    if (forgotStep > 0) {
+                        forgotStep = 0
+                    } else {
+                        onDismiss()
+                    }
+                },
                 enabled = !authState.isBusy,
             ) {
-                Text("Close")
+                Text(if (forgotStep > 0) "Back to Sign In" else "Close")
             }
         },
     )
